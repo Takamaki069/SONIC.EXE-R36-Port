@@ -1,3 +1,5 @@
+<img src="Sonic.EXE_ Bloodstained VHS Nightmare." width="520" height="392">
+
 # sonicexe-runner
 
 A small, purpose-built runner for **Sonic.EXE** (GameMaker: Studio 1.x, bytecode v13) so it can run natively
