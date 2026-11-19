@@ -14,7 +14,8 @@ static int padmap[PCOUNT]={32,88,90,67,65,83,13,27,81,69};      /* A=space B=X X
 static int joydebug=0, cfg_rawpad=0;
 static int rawmap[PCOUNT]={0,1,2,3,4,5,7,6,8,9};      /* raw joystick button index for A,B,X,Y,L1,R1,START,SELECT,L2,R2 */
 static int rawdpad[4]={-1,-1,-1,-1};                   /* raw button indices for dpad up,down,left,right (-1 = use hat/axes) */
-static int inlog=0;
+static int inlog=0, joy_cfg_touched=0, cfg_deadzone=14000;
+static int lastsign[16];
 
 /* ---------------- video ---------------- */
 static void s_upload(int p,int w,int h,const uint8_t *rgba){
@@ -66,32 +67,44 @@ static int sc_to_vk(int sc){
     case SDL_SCANCODE_LSHIFT: case SDL_SCANCODE_RSHIFT: return 16; case SDL_SCANCODE_LCTRL: case SDL_SCANCODE_RCTRL: return 17; case SDL_SCANCODE_LALT: case SDL_SCANCODE_RALT: return 18; }
   return 0; }
 static SDL_GameController *gc[8]; static SDL_Joystick *js[8]; static int njoy;
+/* Odroid-GO family ("GO-Advance Gamepad", "GO-Super Gamepad"): d-pad is buttons 10-13, triggers 6/7, select 8, start 9 */
+static void apply_go_defaults(void){
+  if(joy_cfg_touched) return;
+  rawmap[PL2]=6; rawmap[PR2]=7; rawmap[PSELECT]=8; rawmap[PSTART]=9; rawdpad[0]=10; rawdpad[1]=11; rawdpad[2]=12; rawdpad[3]=13; }
 static void open_pads(void){
   for(int i=0;i<SDL_NumJoysticks()&&njoy<8;i++){
-    if(!cfg_rawpad&&SDL_IsGameController(i)){ gc[njoy]=SDL_GameControllerOpen(i); if(gc[njoy]){ fprintf(stderr,"pad %d: controller '%s'\n",i,SDL_GameControllerName(gc[njoy]));
+    const char*pn=SDL_JoystickNameForIndex(i); int is_go=pn&&!strncmp(pn,"GO-",3);
+    if(is_go) apply_go_defaults();
+    if(!cfg_rawpad&&!is_go&&SDL_IsGameController(i)){ gc[njoy]=SDL_GameControllerOpen(i); if(gc[njoy]){ fprintf(stderr,"pad %d: controller '%s'\n",i,SDL_GameControllerName(gc[njoy]));
         char*m=SDL_GameControllerMapping(gc[njoy]); if(m){ fprintf(stderr,"pad %d mapping: %s\n",i,m); SDL_free(m); } njoy++; } }
     else { js[njoy]=SDL_JoystickOpen(i); if(js[njoy]){ fprintf(stderr,"pad %d: raw joystick '%s' (%d buttons)\n",i,SDL_JoystickName(js[njoy]),SDL_JoystickNumButtons(js[njoy])); njoy++; } } } }
 #define B(x) SDL_GameControllerGetButton(c,x)
+static int stick_state(int v,int *held){          /* hysteresis: engage beyond deadzone, release well inside it */
+  int engage=cfg_deadzone, release=cfg_deadzone*6/10; int a=v<0?-v:v;
+  if(!*held&&a>engage) *held=v<0?-1:1; else if(*held&&a<release) *held=0; else if(*held&&((v<0)!=(*held<0))&&a>engage) *held=v<0?-1:1;
+  return *held; }
+static int stickx[8],sticky[8];
 static void poll_pads(uint8_t k[256],int *quit){
-  static int comboframes=0; int start=0,sel=0;
+  static int comboframes=0; int start=0,sel=0,l2=0,r2=0;
   for(int i=0;i<njoy;i++){
     if(gc[i]){ SDL_GameController*c=gc[i];
       if(B(SDL_CONTROLLER_BUTTON_DPAD_LEFT)) k[37]=1; if(B(SDL_CONTROLLER_BUTTON_DPAD_UP)) k[38]=1; if(B(SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) k[39]=1; if(B(SDL_CONTROLLER_BUTTON_DPAD_DOWN)) k[40]=1;
       int ax=SDL_GameControllerGetAxis(c,SDL_CONTROLLER_AXIS_LEFTX), ay=SDL_GameControllerGetAxis(c,SDL_CONTROLLER_AXIS_LEFTY);
-      if(ax<-12000) k[37]=1; if(ax>12000) k[39]=1; if(ay<-12000) k[38]=1; if(ay>12000) k[40]=1;
+      { int sx=stick_state(ax,&stickx[i&7]), sy=stick_state(ay,&sticky[i&7]); if(sx<0)k[37]=1; if(sx>0)k[39]=1; if(sy<0)k[38]=1; if(sy>0)k[40]=1; }
       if(B(SDL_CONTROLLER_BUTTON_A)) k[padmap[PA]]=1; if(B(SDL_CONTROLLER_BUTTON_B)) k[padmap[PB]]=1; if(B(SDL_CONTROLLER_BUTTON_X)) k[padmap[PX]]=1; if(B(SDL_CONTROLLER_BUTTON_Y)) k[padmap[PY]]=1;
       if(B(SDL_CONTROLLER_BUTTON_LEFTSHOULDER)) k[padmap[PL1]]=1; if(B(SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) k[padmap[PR1]]=1;
       if(B(SDL_CONTROLLER_BUTTON_START)){ k[padmap[PSTART]]=1; start=1; } if(B(SDL_CONTROLLER_BUTTON_BACK)){ k[padmap[PSELECT]]=1; sel=1; }
-      if(SDL_GameControllerGetAxis(c,SDL_CONTROLLER_AXIS_TRIGGERLEFT)>12000) k[padmap[PL2]]=1; if(SDL_GameControllerGetAxis(c,SDL_CONTROLLER_AXIS_TRIGGERRIGHT)>12000) k[padmap[PR2]]=1;
+      if(SDL_GameControllerGetAxis(c,SDL_CONTROLLER_AXIS_TRIGGERLEFT)>12000){ k[padmap[PL2]]=1; l2=1; } if(SDL_GameControllerGetAxis(c,SDL_CONTROLLER_AXIS_TRIGGERRIGHT)>12000){ k[padmap[PR2]]=1; r2=1; }
     } else if(js[i]){ SDL_Joystick*j=js[i]; int nb=SDL_JoystickNumButtons(j);
       /* generic handheld layout (check with JOYDEBUG=1 and adjust via sonicexe.cfg 'joy*' entries) */
       for(int d=0;d<4;d++){ int bi=rawdpad[d]; if(bi>=0&&bi<nb&&SDL_JoystickGetButton(j,bi)) k[(int[]){38,40,37,39}[d]]=1; }
-      for(int b=0;b<PCOUNT;b++){ int bi=rawmap[b]; if(bi<nb&&SDL_JoystickGetButton(j,bi)){ k[padmap[b]]=1; if(b==PSTART) start=1; if(b==PSELECT) sel=1; } }
+      for(int b=0;b<PCOUNT;b++){ int bi=rawmap[b]; if(bi>=0&&bi<nb&&SDL_JoystickGetButton(j,bi)){ k[padmap[b]]=1; if(b==PSTART) start=1; if(b==PSELECT) sel=1; if(b==PL2) l2=1; if(b==PR2) r2=1; } }
       if(joydebug) for(int b=0;b<nb;b++) if(SDL_JoystickGetButton(j,b)) fprintf(stderr,"joy%d button %d\n",i,b);
       int hat=SDL_JoystickNumHats(j)?SDL_JoystickGetHat(j,0):0; if(hat&SDL_HAT_LEFT) k[37]=1; if(hat&SDL_HAT_UP) k[38]=1; if(hat&SDL_HAT_RIGHT) k[39]=1; if(hat&SDL_HAT_DOWN) k[40]=1;
-      if(SDL_JoystickNumAxes(j)>=2){ int ax=SDL_JoystickGetAxis(j,0),ay=SDL_JoystickGetAxis(j,1); if(ax<-12000)k[37]=1; if(ax>12000)k[39]=1; if(ay<-12000)k[38]=1; if(ay>12000)k[40]=1; }
+      if(SDL_JoystickNumAxes(j)>=2){ int sx=stick_state(SDL_JoystickGetAxis(j,0),&stickx[i&7]), sy=stick_state(SDL_JoystickGetAxis(j,1),&sticky[i&7]);
+        if(sx<0)k[37]=1; if(sx>0)k[39]=1; if(sy<0)k[38]=1; if(sy>0)k[40]=1; }
     } }
-  if(start&&sel){ if(++comboframes>90) *quit=1; } else comboframes=0; }
+  if((start&&sel)||(l2&&r2)){ if(++comboframes>90) *quit=1; } else comboframes=0; }   /* Start+Select (or L2+R2) held ~1.5 s */
 
 #undef B
 /* ---------------- config ---------------- */
@@ -103,8 +116,8 @@ static void load_cfg(const char *dir){
     else if(!strcmp(l,"texbudget")) g_tex_budget_mb=n; else if(!strcmp(l,"touch")) g_hide_touch=!n;
     else if(!strcmp(l,"a")) padmap[PA]=n; else if(!strcmp(l,"b")) padmap[PB]=n; else if(!strcmp(l,"x")) padmap[PX]=n; else if(!strcmp(l,"y")) padmap[PY]=n;
     else if(!strcmp(l,"l1")) padmap[PL1]=n; else if(!strcmp(l,"r1")) padmap[PR1]=n; else if(!strcmp(l,"start")) padmap[PSTART]=n; else if(!strcmp(l,"select")) padmap[PSELECT]=n;
-    else if(!strcmp(l,"rawpad")) cfg_rawpad=n;
-    else if(!strcmp(l,"joy_a")) rawmap[PA]=n; else if(!strcmp(l,"joy_b")) rawmap[PB]=n; else if(!strcmp(l,"joy_x")) rawmap[PX]=n; else if(!strcmp(l,"joy_y")) rawmap[PY]=n;
+    else if(!strcmp(l,"rawpad")) cfg_rawpad=n; else if(!strcmp(l,"deadzone")) cfg_deadzone=n;
+    else if(!strncmp(l,"joy_",4)&&(joy_cfg_touched=1)&&0) {} else if(!strcmp(l,"joy_a")) rawmap[PA]=n; else if(!strcmp(l,"joy_b")) rawmap[PB]=n; else if(!strcmp(l,"joy_x")) rawmap[PX]=n; else if(!strcmp(l,"joy_y")) rawmap[PY]=n;
     else if(!strcmp(l,"joy_l1")) rawmap[PL1]=n; else if(!strcmp(l,"joy_r1")) rawmap[PR1]=n; else if(!strcmp(l,"joy_start")) rawmap[PSTART]=n; else if(!strcmp(l,"joy_select")) rawmap[PSELECT]=n;
     else if(!strcmp(l,"joy_up")) rawdpad[0]=n; else if(!strcmp(l,"joy_down")) rawdpad[1]=n; else if(!strcmp(l,"joy_left")) rawdpad[2]=n; else if(!strcmp(l,"joy_right")) rawdpad[3]=n;
     else if(!strcmp(l,"l2")) padmap[PL2]=n; else if(!strcmp(l,"r2")) padmap[PR2]=n; }
@@ -133,10 +146,11 @@ int main(int argc,char**argv){
   uint8_t keys[256]; int quit=0; Uint32 next=SDL_GetTicks(); Uint32 fpst=SDL_GetTicks(); int fc=0; double frame_ms=1000.0/60.0; double acc=0;
   while(!quit){
     SDL_Event ev; while(SDL_PollEvent(&ev)){ if(ev.type==SDL_QUIT) quit=1;
-      if(inlog<400){ if(ev.type==SDL_CONTROLLERBUTTONDOWN||ev.type==SDL_CONTROLLERBUTTONUP) { fprintf(stderr,"[input] controller button %d %s\n",ev.cbutton.button,ev.type==SDL_CONTROLLERBUTTONDOWN?"down":"up"); inlog++; }
+      if(inlog<600){ if(ev.type==SDL_CONTROLLERBUTTONDOWN||ev.type==SDL_CONTROLLERBUTTONUP) { fprintf(stderr,"[input] controller button %d %s\n",ev.cbutton.button,ev.type==SDL_CONTROLLERBUTTONDOWN?"down":"up"); inlog++; }
         else if(ev.type==SDL_JOYBUTTONDOWN||ev.type==SDL_JOYBUTTONUP){ fprintf(stderr,"[input] joy button %d %s\n",ev.jbutton.button,ev.type==SDL_JOYBUTTONDOWN?"down":"up"); inlog++; }
         else if(ev.type==SDL_JOYHATMOTION){ fprintf(stderr,"[input] joy hat %d value %d\n",ev.jhat.hat,ev.jhat.value); inlog++; }
-        else if(ev.type==SDL_JOYAXISMOTION&&(ev.jaxis.value>16000||ev.jaxis.value<-16000)){ fprintf(stderr,"[input] joy axis %d value %d\n",ev.jaxis.axis,ev.jaxis.value); inlog++; } } if(ev.type==SDL_JOYDEVICEADDED||ev.type==SDL_CONTROLLERDEVICEADDED) { if(!njoy) open_pads(); } }
+        else if(ev.type==SDL_JOYAXISMOTION&&ev.jaxis.axis<16){ int sg=ev.jaxis.value>16000?1:(ev.jaxis.value<-16000?-1:(abs(ev.jaxis.value)<8000?0:lastsign[ev.jaxis.axis]));
+          if(sg!=lastsign[ev.jaxis.axis]){ lastsign[ev.jaxis.axis]=sg; fprintf(stderr,"[input] joy axis %d -> %d\n",ev.jaxis.axis,sg); inlog++; } } } if(ev.type==SDL_JOYDEVICEADDED||ev.type==SDL_CONTROLLERDEVICEADDED) { if(!njoy) open_pads(); } }
     memset(keys,0,sizeof keys); const Uint8*ks=SDL_GetKeyboardState(NULL);
     for(int sc=0;sc<SDL_NUM_SCANCODES;sc++) if(ks[sc]){ int vk=sc_to_vk(sc); if(vk) keys[vk]=1; }
     poll_pads(keys,&quit);

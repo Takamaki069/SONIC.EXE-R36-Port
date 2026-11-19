@@ -315,7 +315,7 @@ FN(action_move){ Inst*s=c->self; const char*d=ARG(0).s?ARG(0).s:""; double sp=NA
       double nh,nv; if(dirs[k]<0){ nh=0; nv=0; } else { nh=sp*cos(dirs[k]*M_PI/180); nv=-sp*sin(dirs[k]*M_PI/180); } s->hs+=nh; s->vs+=nv; sync_hv(s); }
     else { if(dirs[k]<0){ s->spd=0; } else { s->dir=dirs[k]; s->spd=sp; } sync_sd(s); } }
   return vnum(0); }
-FN(action_timeline_set){ Inst*s=c->self; s->tl=(int)NARG(0); s->tl_pos=NARG(1); s->tl_run=truth(ARG(2)); return vnum(0); }
+FN(action_timeline_set){ Inst*s=c->self; s->tl=(int)NARG(0); s->tl_pos=NARG(1); s->tl_run=!truth(ARG(2)); return vnum(0); }  /* 0 = start at once (the game passes 0 and relies on it) */
 FN(action_if_variable){ double x=NARG(0),y=NARG(1); int op=(int)NARG(2); return vnum(op==0?fabs(x-y)<1e-9:(op==1?x<y:x>y)); }
 FN(action_color){ E.dcolor=(uint32_t)(long long)NARG(0); return vnum(0); }
 FN(action_font){ E.dfont=(int)NARG(0); E.dhalign=(int)NARG(1); return vnum(0); }
@@ -333,6 +333,7 @@ FN(environment_get_variable){ const char*k=ARG(0).s?ARG(0).s:""; const char*v=ge
 static inline void col(uint32_t bgr,uint8_t*r,uint8_t*g,uint8_t*b){ *r=bgr&255; *g=(bgr>>8)&255; *b=(bgr>>16)&255; }
 static void submit(TPag*t,double dx,double dy,double dw,double dh,double px,double py,double ang,uint32_t blend,double alpha){
   if(alpha<=0) return; tex_use(t->page); double sc=E.tsc;
+  dx=floor(dx+0.5); dy=floor(dy+0.5); px=floor(px+0.5); py=floor(py+0.5);
   uint8_t r,g,b; col(blend,&r,&g,&b);
   PL->draw(t->page,t->sx,t->sy,t->sw,t->sh,(float)((dx-E.tvx)*sc+E.tpx),(float)((dy-E.tvy)*sc+E.tpy),(float)(dw*sc),(float)(dh*sc),
            (float)((px-E.tvx)*sc+E.tpx),(float)((py-E.tvy)*sc+E.tpy),(float)ang,r,g,b,(float)alpha); }
@@ -400,7 +401,7 @@ static void update_views(int snap){
   Room*rm=&D.room[E.room];
   for(int v=0;v<MAX_VIEWS;v++){ if(!rm->view[v].enabled||E.vobj[v]<0) continue;
     Inst*t=E.vobj[v]>=100000?inst_by_id(E.vobj[v]):inst_first_obj(E.vobj[v]); if(!t) continue;
-    double l,tp,r,b; if(!bbox(t,t->x,t->y,&l,&tp,&r,&b)){ l=r=t->x; tp=b=t->y; }
+    double l=t->x,r=t->x,tp=t->y,b=t->y;   /* follow the origin (stable); mask edges change every animation frame */
     double hb=rm->view[v].bh,vb=rm->view[v].bv,nx=E.vx[v],ny=E.vy[v];
     if(l-hb<nx) nx=l-hb; else if(r+hb>nx+E.vw[v]) nx=r+hb-E.vw[v];
     if(tp-vb<ny) ny=tp-vb; else if(b+vb>ny+E.vh[v]) ny=b+vb-E.vh[v];
@@ -408,6 +409,9 @@ static void update_views(int snap){
     double hs=rm->view[v].hs,vs=rm->view[v].vs;
     if(!snap&&hs>=0&&fabs(nx-E.vx[v])>hs) nx=E.vx[v]+(nx>E.vx[v]?hs:-hs);
     if(!snap&&vs>=0&&fabs(ny-E.vy[v])>vs) ny=E.vy[v]+(ny>E.vy[v]?vs:-vs);
+    /* safeguard: the speed limit may slow the camera but must never let the followed object leave the screen */
+    if(t->x<nx) nx=t->x; if(t->x>nx+E.vw[v]) nx=t->x-E.vw[v];
+    if(t->y<ny) ny=t->y; if(t->y>ny+E.vh[v]) ny=t->y-E.vh[v];
     E.vx[v]=nx; E.vy[v]=ny; } }
 
 static void step(void){
@@ -459,7 +463,7 @@ static void draw_tile(Tile*tl){
   submit(&q,tl->x+(u0-tl->sx)*tl->xs,tl->y+(v0-tl->sy)*tl->ys,q.sw*tl->xs,q.sh*tl->ys,tl->x,tl->y,0,tl->color&0xFFFFFF,((tl->color>>24)&255)/255.0); }
 
 static void draw_world(double vx,double vy,double vw,double vh,double px,double py,double pw,double ph){
-  Room*rm=&D.room[E.room]; E.tvx=vx; E.tvy=vy; E.tsc=pw/vw; E.tpx=px; E.tpy=py;
+  Room*rm=&D.room[E.room]; E.tvx=floor(vx+0.5); E.tvy=floor(vy+0.5); E.tsc=pw/vw; E.tpx=px; E.tpy=py;
   PL->clip((int)px,(int)py,(int)pw,(int)ph);
   if(rm->drawbg){ uint8_t r,g,b; col(E.bgcolor,&r,&g,&b); PL->rect((float)px,(float)py,(float)pw,(float)ph,r,g,b,1); }
   for(int k=0;k<MAX_BG;k++) if(!E.bgfg[k]) draw_bg(k,vx,vy,vw,vh);
@@ -503,3 +507,11 @@ void engine_frame(const uint8_t keys[256]){
   step();
   if(E.next_room>=0&&E.next_room<D.nroom){ enter_room(E.next_room); update_views(1); }
   draw(); E.frame++; }
+
+/* ---- debug/test hooks ---- */
+int engine_set_global(const char*name,double v){ for(int i=0;i<D.nvar;i++) if(!strcmp(D.var[i].name,name)){ gv[i]=vnum(v); return 0; } return -1; }
+static int obj_by_name(const char*n){ for(int o=0;o<D.nobj;o++) if(!strcmp(D.obj[o].name,n)) return o; return -1; }
+int engine_obj_info(const char*name,double*x,double*y,double*hs){ int o=obj_by_name(name); if(o<0) return 0; Inst*i=inst_first_obj(o); if(!i) return 0; *x=i->x; *y=i->y; *hs=i->hs; return 1; }
+void engine_set_pos(const char*name,double x,double y){ int o=obj_by_name(name); if(o<0) return; Inst*i=inst_first_obj(o); if(i){ i->x=x; i->y=y; } }
+void engine_view_pos(double*x,double*y){ *x=E.vx[0]; *y=E.vy[0]; }
+int engine_obj_count(const char*name){ int o=obj_by_name(name),n=0; if(o<0) return 0; for(int k=0;k<nI;k++) if(I[k]->obj==o&&!I[k]->dead) n++; return n; }

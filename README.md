@@ -44,8 +44,9 @@ Copy `ports/Sonic.EXE.sh` to `/roms/ports/` (or `/roms2/ports/`) and make a fold
 Log output goes to `sonicexe/log.txt`.
 
 ## Controls
-D-pad / left stick = arrows, **A** = Space (jump/confirm), **B** = X, **X** = Z, **Y** = C, **Start** = Enter,
-**Select** = Esc, L1/R1 = A/S. **Hold Start+Select ~1.5 s to quit.** Keyboard works too (F10 quits).
+D-pad **and** left stick = arrows, south button = Space (jump), east = X (interact), **Start** = Enter (confirms Data Select),
+**Select** = Esc, L1/R1 = A/S. **Hold Start+Select (or L2+R2) ~1.5 s to quit.** Keyboard works too (F10 quits).
+Odroid-GO pads are auto-detected; the stick has a hysteresis dead zone (`deadzone` in `sonicexe.cfg`).
 Remap in `sonicexe.cfg`. For controllers SDL doesn't recognise, run with `JOYDEBUG=1` to print raw button numbers.
 
 ## If the controller does nothing
