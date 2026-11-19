@@ -48,6 +48,13 @@ D-pad / left stick = arrows, **A** = Space (jump/confirm), **B** = X, **X** = Z,
 **Select** = Esc, L1/R1 = A/S. **Hold Start+Select ~1.5 s to quit.** Keyboard works too (F10 quits).
 Remap in `sonicexe.cfg`. For controllers SDL doesn't recognise, run with `JOYDEBUG=1` to print raw button numbers.
 
+## If the controller does nothing
+* The **title screen is a non-interactive intro** (about 10 s, then it moves on by itself). The **Data Select** screen
+  needs **Start** (Enter). In-game: D-pad/stick, **A** = jump.
+* The log shows `[input] ...` lines for every button SDL receives. No lines at all = SDL isn't delivering events
+  (the launcher sets `SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1` for this). Lines present but wrong action = fix the mapping:
+  set `rawpad=1` in `sonicexe.cfg` and use the `joy_*` entries with the numbers from the log.
+
 ## Tuning for handhelds
 * Slow / stutters: set `vsync=0`, lower `texbudget` (e.g. 96), set `fps=1` and watch `log.txt`.
 * Texture decode causes a short hitch the first time each atlas page is used (the 4096x4096 pages are 64 MB each).

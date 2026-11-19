@@ -12,6 +12,8 @@ fi
 
 sudo chmod 666 /dev/tty1 2>/dev/null
 printf "\033c" > /dev/tty1
+export SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1      # handhelds have no keyboard focus; SDL would otherwise ignore the pad
+export SDL_AUDIODRIVER=${SDL_AUDIODRIVER:-alsa}        # avoids the harmless "pulse" warning; remove this line if you get no sound
 export SDL_GAMECONTROLLERCONFIG_FILE="$GAMEDIR/gamecontrollerdb.txt"   # optional; ignored if missing
 ./sonicexe "$GAMEDIR" > log.txt 2>&1
 printf "\033c" > /dev/tty1
