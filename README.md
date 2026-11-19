@@ -1,4 +1,4 @@
-<img src="Sonic.EXE_ Bloodstained VHS Nightmare." width="520" height="392">
+<img src="Sonic.EXE_ Bloodstained VHS Nightmare.png" width="520" height="392">
 
 # sonicexe-runner
 
