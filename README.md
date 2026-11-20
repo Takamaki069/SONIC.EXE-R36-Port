@@ -1,4 +1,6 @@
-# sonicexe-runner
+<img src="Sonic.EXE R36 Port Nightmare.png" width="1024" height="384">
+
+# Sonic.exe R36 Port
 
 A small, purpose-built runner for **Sonic.EXE** (GameMaker: Studio 1.x, bytecode v13) so it can run natively
 on ARM Linux / ArkOS handhelds. It reads the game's own `data.win` directly (no x86 code, no Wine) and
