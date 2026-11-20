@@ -1,6 +1,4 @@
-<img src="Git Banner Art.png" width="1024" height="384">
-
-# Sonic.exe R36 Port
+# sonicexe-runner
 
 A small, purpose-built runner for **Sonic.EXE** (GameMaker: Studio 1.x, bytecode v13) so it can run natively
 on ARM Linux / ArkOS handhelds. It reads the game's own `data.win` directly (no x86 code, no Wine) and
@@ -48,9 +46,9 @@ Log output goes to `sonicexe/log.txt`.
 
 ## Controls
 D-pad **and** left stick = arrows, button 0 = Space (jump), button 1 = X (interact), **Start** = Enter (confirms Data Select),
-**Select** = Esc, L1/R1 = A/S. **Hold Start+Select (or L2+R2) ~1.5 s to quit.** Keyboard works too (F10 quits).
+**Select** = Esc, L1/R1 = A/S. **Hold Start+Select (or L2+R2) for about 0.7 s to quit** (log.txt shows `[input] quit combo ...` lines when it is detected). Keyboard works too (F10 quits).
 Default raw layout is the Odroid-GO Super (d-pad 8-11, Select 12, Start 13); the stick has a hysteresis dead zone.
-The in-game greeting uses `name=` from `sonicexe.cfg` (default `player`).
+The in-game greeting uses `name=` from `sonicexe.cfg` (default `player`); `wrap_text=1` (default) wraps long names onto several lines.
 Remap in `sonicexe.cfg`. For controllers SDL doesn't recognise, run with `JOYDEBUG=1` to print raw button numbers.
 
 ## If the controller does nothing
@@ -59,6 +57,11 @@ Remap in `sonicexe.cfg`. For controllers SDL doesn't recognise, run with `JOYDEB
 * The log shows `[input] ...` lines for every button SDL receives. No lines at all = SDL isn't delivering events
   (the launcher sets `SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1` for this). Lines present but wrong action = fix the mapping:
   set `rawpad=1` in `sonicexe.cfg` and use the `joy_*` entries with the numbers from the log.
+
+## Loading
+Texture atlases are large (the biggest decodes to 64 MB). To hide the wait: the title screen's textures are decoded on a
+background thread while SDL/GL start up, the next room's textures are prefetched while you play, and **music/sounds that a
+room starts are held until that room's first frame is on screen**, so picture and music always appear together.
 
 ## Tuning for handhelds
 * Slow / stutters: set `vsync=0`, lower `texbudget` (e.g. 96), set `fps=1` and watch `log.txt`.

@@ -80,7 +80,7 @@ static int stick_state(int v,int *held){          /* hysteresis: engage beyond d
   return *held; }
 static int stickx[8],sticky[8];
 static void poll_pads(uint8_t k[256],int *quit){
-  static int comboframes=0; int start=0,sel=0,l2=0,r2=0;
+  static Uint32 combo_t0=0; static int combo_on=0; int start=0,sel=0,l2=0,r2=0;
   for(int i=0;i<njoy;i++){
     if(gc[i]){ SDL_GameController*c=gc[i];
       if(B(SDL_CONTROLLER_BUTTON_DPAD_LEFT)) k[37]=1; if(B(SDL_CONTROLLER_BUTTON_DPAD_UP)) k[38]=1; if(B(SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) k[39]=1; if(B(SDL_CONTROLLER_BUTTON_DPAD_DOWN)) k[40]=1;
@@ -99,7 +99,11 @@ static void poll_pads(uint8_t k[256],int *quit){
       if(SDL_JoystickNumAxes(j)>=2){ int sx=stick_state(SDL_JoystickGetAxis(j,0),&stickx[i&7]), sy=stick_state(SDL_JoystickGetAxis(j,1),&sticky[i&7]);
         if(sx<0)k[37]=1; if(sx>0)k[39]=1; if(sy<0)k[38]=1; if(sy>0)k[40]=1; }
     } }
-  if((start&&sel)||(l2&&r2)){ if(++comboframes>90) *quit=1; } else comboframes=0; }   /* Start+Select (or L2+R2) held ~1.5 s */
+  /* Start+Select (or L2+R2) held for ~0.7 s of REAL time (not frames: the game may run below 60 fps) quits */
+  if((start&&sel)||(l2&&r2)){ Uint32 now=SDL_GetTicks();
+    if(!combo_on){ combo_on=1; combo_t0=now; fprintf(stderr,"[input] quit combo detected - keep holding to exit\n"); }
+    else if(now-combo_t0>=700){ fprintf(stderr,"[input] quit combo held - exiting\n"); *quit=1; } }
+  else combo_on=0; }
 
 #undef B
 /* ---------------- config ---------------- */
@@ -111,7 +115,7 @@ static void load_cfg(const char *dir){
     else if(!strcmp(l,"texbudget")) g_tex_budget_mb=n; else if(!strcmp(l,"touch")) g_hide_touch=!n;
     else if(!strcmp(l,"a")) padmap[PA]=n; else if(!strcmp(l,"b")) padmap[PB]=n; else if(!strcmp(l,"x")) padmap[PX]=n; else if(!strcmp(l,"y")) padmap[PY]=n;
     else if(!strcmp(l,"l1")) padmap[PL1]=n; else if(!strcmp(l,"r1")) padmap[PR1]=n; else if(!strcmp(l,"start")) padmap[PSTART]=n; else if(!strcmp(l,"select")) padmap[PSELECT]=n;
-    else if(!strcmp(l,"rawpad")) cfg_rawpad=n; else if(!strcmp(l,"deadzone")) cfg_deadzone=n; else if(!strcmp(l,"name")){ static char nm[64]; snprintf(nm,sizeof nm,"%s",v); g_player_name=nm; }
+    else if(!strcmp(l,"rawpad")) cfg_rawpad=n; else if(!strcmp(l,"deadzone")) cfg_deadzone=n; else if(!strcmp(l,"wrap_text")) g_wrap_text=n; else if(!strcmp(l,"name")){ static char nm[64]; snprintf(nm,sizeof nm,"%s",v); g_player_name=nm; }
     else if(!strncmp(l,"joy_",4)&&(joy_cfg_touched=1)&&0) {} else if(!strcmp(l,"joy_a")) rawmap[PA]=n; else if(!strcmp(l,"joy_b")) rawmap[PB]=n; else if(!strcmp(l,"joy_x")) rawmap[PX]=n; else if(!strcmp(l,"joy_y")) rawmap[PY]=n;
     else if(!strcmp(l,"joy_l1")) rawmap[PL1]=n; else if(!strcmp(l,"joy_r1")) rawmap[PR1]=n; else if(!strcmp(l,"joy_start")) rawmap[PSTART]=n; else if(!strcmp(l,"joy_select")) rawmap[PSELECT]=n;
     else if(!strcmp(l,"joy_up")) rawdpad[0]=n; else if(!strcmp(l,"joy_down")) rawdpad[1]=n; else if(!strcmp(l,"joy_left")) rawdpad[2]=n; else if(!strcmp(l,"joy_right")) rawdpad[3]=n;
@@ -122,6 +126,7 @@ int main(int argc,char**argv){
   if(argc>1&&argv[1][0]!='-') gamedir=argv[1]; if(getenv("JOYDEBUG")) joydebug=1; if(getenv("SONIC_VERBOSE")) g_verbose=1;
   load_cfg(gamedir);
   char path[1024]; snprintf(path,sizeof path,"%s/data.win",gamedir); if(data_load(path)) return 1;
+  engine_prefetch_start();      /* decode the title screen's textures on a worker thread while SDL/GL start up */
   /* Without keyboard focus (typical on handhelds) SDL silently drops joystick input unless this is set */
   SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS,"1");
   if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_JOYSTICK|SDL_INIT_GAMECONTROLLER|SDL_INIT_AUDIO)<0){ fprintf(stderr,"SDL_Init: %s\n",SDL_GetError()); return 1; }
@@ -150,7 +155,7 @@ int main(int argc,char**argv){
     for(int sc=0;sc<SDL_NUM_SCANCODES;sc++) if(ks[sc]){ int vk=sc_to_vk(sc); if(vk) keys[vk]=1; }
     poll_pads(keys,&quit);
     if(ks[SDL_SCANCODE_F10]) quit=1;
-    engine_frame(keys); SDL_RenderPresent(ren);
+    engine_frame(keys); SDL_RenderPresent(ren); engine_present_done();   /* music held for a new room starts now, with its picture */
     fc++; Uint32 now=SDL_GetTicks();
     if(cfg_showfps&&now-fpst>=2000){ fprintf(stderr,"fps %.1f room %d inst %d\n",fc*1000.0/(now-fpst),engine_room(),engine_ninst()); fc=0; fpst=now; }
     acc+=frame_ms; next+=(Uint32)acc; acc-=(Uint32)acc; if((int)(next-now)>0&&(int)(next-now)<40) SDL_Delay(next-now); else if((int)(now-next)>100) next=now;
@@ -158,4 +163,4 @@ int main(int argc,char**argv){
 #ifndef NO_AUDIO
   Mix_CloseAudio();
 #endif
-  SDL_Quit(); return 0; }
+  fprintf(stderr,"exiting\n"); SDL_Quit(); return 0; }

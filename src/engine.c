@@ -4,6 +4,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include <pthread.h>
 
 const char *g_player_name="player"; Platform *PL; int g_tex_budget_mb=160, g_verbose=0, g_hide_touch=1;
 
@@ -46,7 +47,45 @@ static struct {
   int frame; int touch_obj;
 } E;
 
+/* Audio started by a room's Create code is held back until that room's first frame has been presented,
+   so the picture and the music appear together even when the textures take a while to load. */
+typedef struct { int kind,snd,loop; } AudCmd;
+static AudCmd aq[128]; static int naq,audio_hold;
+static void aud_exec(int kind,int snd,int loop){ switch(kind){ case 0: PL->sfx_play(snd,loop); break; case 1: PL->sfx_stop(snd); break; case 2: PL->music_play(snd,loop); break; case 3: PL->music_stop(); break; } }
+static void aud(int kind,int snd,int loop){ if(audio_hold){ if(naq<128) aq[naq++]=(AudCmd){kind,snd,loop}; return; } aud_exec(kind,snd,loop); }
+void engine_present_done(void){ if(!audio_hold) return; audio_hold=0; for(int i=0;i<naq;i++) aud_exec(aq[i].kind,aq[i].snd,aq[i].loop); naq=0; }
 static int tex_loaded[64]; static int tex_last[64]; static size_t tex_bytes;
+
+/* ---- background PNG decoding: pages likely needed soon are decoded on a worker thread while the main thread does other work ---- */
+enum { T_NONE=0, T_QUEUED, T_DECODING, T_READY, T_FAILED };
+static struct { int state; uint8_t *px; int w,h; } tpf[64];
+static pthread_mutex_t tmx=PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t tcv=PTHREAD_COND_INITIALIZER;
+static int tq[64],tqn; static int tth_started; static size_t pf_bytes;
+static void *tex_worker(void*arg){ (void)arg;
+  for(;;){ pthread_mutex_lock(&tmx); while(!tqn) pthread_cond_wait(&tcv,&tmx);
+    int p=tq[0]; memmove(tq,tq+1,(--tqn)*sizeof(int)); tpf[p].state=T_DECODING; pthread_mutex_unlock(&tmx);
+    int w=0,h=0; uint8_t*px=png_decode_rgba(D.tex[p].png,(size_t)-1>>1,&w,&h);
+    pthread_mutex_lock(&tmx); tpf[p].px=px; tpf[p].w=w; tpf[p].h=h; tpf[p].state=px?T_READY:T_FAILED; pthread_cond_broadcast(&tcv); pthread_mutex_unlock(&tmx); }
+  return NULL; }
+static void tex_prefetch(int p){
+  if(p<0||p>=D.ntex||p>=64||tex_loaded[p]) return; size_t need=(size_t)D.tex[p].w*D.tex[p].h*4;
+  pthread_mutex_lock(&tmx);
+  if(tpf[p].state==T_NONE&&pf_bytes+need<=(size_t)128<<20&&tex_bytes+pf_bytes+need<=(size_t)g_tex_budget_mb*1048576){
+    if(!tth_started){ pthread_t t; if(pthread_create(&t,NULL,tex_worker,NULL)==0){ pthread_detach(t); tth_started=1; } }
+    if(tth_started){ tq[tqn++]=p; tpf[p].state=T_QUEUED; pf_bytes+=need; pthread_cond_signal(&tcv); } }
+  pthread_mutex_unlock(&tmx); }
+/* returns a ready decoded buffer (waiting for the worker if it is mid-decode), or NULL if the caller must decode itself */
+static uint8_t *tex_take_prefetched(int p,int*w,int*h){
+  uint8_t*px=NULL; pthread_mutex_lock(&tmx);
+  if(tpf[p].state==T_QUEUED){ for(int i=0;i<tqn;i++) if(tq[i]==p){ memmove(tq+i,tq+i+1,(--tqn-i)*sizeof(int)); break; } tpf[p].state=T_NONE; pf_bytes-=(size_t)D.tex[p].w*D.tex[p].h*4; }
+  while(tpf[p].state==T_DECODING) pthread_cond_wait(&tcv,&tmx);
+  if(tpf[p].state==T_READY){ px=tpf[p].px; *w=tpf[p].w; *h=tpf[p].h; tpf[p].px=NULL; tpf[p].state=T_NONE; pf_bytes-=(size_t)D.tex[p].w*D.tex[p].h*4; }
+  else if(tpf[p].state==T_FAILED){ tpf[p].state=T_NONE; pf_bytes-=(size_t)D.tex[p].w*D.tex[p].h*4; }
+  pthread_mutex_unlock(&tmx); return px; }
+static void tex_discard_unused(const uint8_t*keep){      /* free decoded-but-unused buffers so they cannot pile up */
+  pthread_mutex_lock(&tmx);
+  for(int p=0;p<D.ntex&&p<64;p++) if(tpf[p].state==T_READY&&!keep[p]){ free(tpf[p].px); tpf[p].px=NULL; tpf[p].state=T_NONE; pf_bytes-=(size_t)D.tex[p].w*D.tex[p].h*4; }
+  pthread_mutex_unlock(&tmx); }
 
 static void tex_use(int p){
   if(p<0||p>=D.ntex) return; tex_last[p]=E.frame;
@@ -56,17 +95,34 @@ static void tex_use(int p){
     for(int i=0;i<D.ntex;i++) if(tex_loaded[i]&&tex_last[i]<E.frame&&tex_last[i]<bl){ bl=tex_last[i]; best=i; }
     if(best<0) break; PL->page_free(best); tex_loaded[best]=0; tex_bytes-=(size_t)D.tex[best].w*D.tex[best].h*4;
     if(g_verbose) fprintf(stderr,"[tex] evict page %d\n",best); }
-  int w,h; uint8_t*px=png_decode_rgba(D.tex[p].png,(size_t)-1>>1,&w,&h);
+  int w,h; uint8_t*px=tex_take_prefetched(p,&w,&h); int pre=px!=NULL;
+  if(!px) px=png_decode_rgba(D.tex[p].png,(size_t)-1>>1,&w,&h);
   if(!px){ fprintf(stderr,"[tex] decode failed for page %d\n",p); tex_loaded[p]=1; return; }
   PL->page_upload(p,w,h,px); free(px); tex_loaded[p]=1; tex_bytes+=need;
-  if(g_verbose) fprintf(stderr,"[tex] loaded page %d (%dx%d), resident %zu MB\n",p,w,h,tex_bytes>>20);
-}
+  if(g_verbose) fprintf(stderr,"[tex] loaded page %d (%dx%d)%s, resident %zu MB\n",p,w,h,pre?" [prefetched]":"",tex_bytes>>20); }
+
+/* which texture pages does a room use (its instances' sprites, backgrounds and tiles)? */
+static void room_pages(int r,uint8_t*used){
+  memset(used,0,64); if(r<0||r>=D.nroom) return; Room*rm=&D.room[r];
+  for(int k=0;k<rm->ninst;k++){ int o=rm->inst[k].obj; if(o<0||o>=D.nobj) continue; int sp=D.obj[o].sprite; if(sp<0||sp>=D.nspr) continue;
+    Sprite*s=&D.spr[sp]; for(int f=0;f<s->nframes;f++) if(s->fr[f]&&s->fr[f]->page<64) used[s->fr[f]->page]=1; }
+  for(int b=0;b<MAX_BG;b++) if(rm->bg[b].enabled&&rm->bg[b].bg>=0&&rm->bg[b].bg<D.nbg) used[D.bg[rm->bg[b].bg].tp->page&63]=1;
+  for(int k=0;k<rm->ntile;k++){ int b=rm->tile[k].bg; if(b>=0&&b<D.nbg) used[D.bg[b].tp->page&63]=1; } }
+static void prefetch_room(int r){ uint8_t u[64]; room_pages(r,u); for(int p=0;p<D.ntex&&p<64;p++) if(u[p]) tex_prefetch(p); }
+/* call right after data_load(): starts decoding the title screen's textures while SDL/GL initialise */
+void engine_prefetch_start(void){ if(D.nroom>1) prefetch_room(1); }
 
 static inline double num(Value v){ return v.s? atof(v.s):v.d; }
 static inline int truth(Value v){ return v.s?0:(v.d>0.5); }
 static double ang_norm(double a){ a=fmod(a,360.0); if(a<0)a+=360; return a; }
+/* exact lengthdir for multiples of 90 degrees: cos(270deg) is -1.8e-16 in floating point, which made
+   gravity leak a tiny horizontal speed and broke exact comparisons like hspeed>=1 in the game code */
+static void lendir(double deg,double*cx,double*sy){
+  double a=ang_norm(deg);
+  if(a==0){ *cx=1; *sy=0; } else if(a==90){ *cx=0; *sy=1; } else if(a==180){ *cx=-1; *sy=0; } else if(a==270){ *cx=0; *sy=-1; }
+  else { double r=a*M_PI/180; *cx=cos(r); *sy=sin(r); } }
 static void sync_hv(Inst*i){ i->spd=hypot(i->hs,i->vs); if(i->spd>1e-9) i->dir=ang_norm(atan2(-i->vs,i->hs)*180/M_PI); }
-static void sync_sd(Inst*i){ double r=i->dir*M_PI/180; i->hs=i->spd*cos(r); i->vs=-i->spd*sin(r); if(fabs(i->hs)<1e-12)i->hs=0; if(fabs(i->vs)<1e-12)i->vs=0; }
+static void sync_sd(Inst*i){ double c,sn; lendir(i->dir,&c,&sn); i->hs=i->spd*c; i->vs=-i->spd*sn; }
 
 static Inst *inst_by_id(int id){ for(int k=0;k<nI;k++) if(I[k]->id==id&&!I[k]->dead) return I[k]; return NULL; }
 static Inst *inst_first_obj(int o){ for(int k=0;k<nI;k++) if(I[k]->obj==o&&!I[k]->dead) return I[k]; return NULL; }
@@ -294,11 +350,11 @@ FN(place_free){ Inst*s=c->self; double x=NARG(0),y=NARG(1);
 FN(keyboard_check){ return vnum(E.key[(int)NARG(0)&255]); }
 FN(keyboard_check_pressed){ return vnum(E.kp[(int)NARG(0)&255]); }
 FN(keyboard_check_released){ return vnum(E.kr[(int)NARG(0)&255]); }
-static void play_snd(int s,int loop){ if(s<0||s>=D.nsnd) return; if(D.snd[s].embedded) PL->sfx_play(s,loop); else PL->music_play(s,loop); }
+static void play_snd(int s,int loop){ if(s<0||s>=D.nsnd) return; if(D.snd[s].embedded) aud(0,s,loop); else aud(2,s,loop); }
 FN(audio_play_sound){ play_snd((int)NARG(0),truth(ARG(2))); return vnum(0); }
 FN(audio_play_music){ play_snd((int)NARG(0),truth(ARG(1))); return vnum(0); }
-FN(audio_stop_music){ PL->music_stop(); return vnum(0); }
-FN(audio_stop_sound){ int s=(int)NARG(0); if(s>=0&&s<D.nsnd){ if(D.snd[s].embedded) PL->sfx_stop(s); else PL->music_stop(); } return vnum(0); }
+FN(audio_stop_music){ aud(3,0,0); return vnum(0); }
+FN(audio_stop_sound){ int s=(int)NARG(0); if(s>=0&&s<D.nsnd){ if(D.snd[s].embedded) aud(1,s,0); else aud(3,0,0); } return vnum(0); }
 FN(action_sound){ play_snd((int)NARG(0),truth(ARG(1))); return vnum(0); }
 FN(action_end_sound){ return f_audio_stop_sound(c,a,n); }
 FN(action_set_relative){ c->relative=truth(ARG(0)); return vnum(0); }
@@ -312,7 +368,7 @@ FN(action_another_room){ return f_room_goto(c,a,n); }
 FN(action_move){ Inst*s=c->self; const char*d=ARG(0).s?ARG(0).s:""; double sp=NARG(1); static const int dirs[9]={225,270,315,180,-1,0,135,90,45};
   int cand[9],nc=0; for(int k=0;k<9&&d[k];k++) if(d[k]=='1') cand[nc++]=k;
   if(nc){ int k=cand[nc>1?rand()%nc:0]; if(c->relative){
-      double nh,nv; if(dirs[k]<0){ nh=0; nv=0; } else { nh=sp*cos(dirs[k]*M_PI/180); nv=-sp*sin(dirs[k]*M_PI/180); } s->hs+=nh; s->vs+=nv; sync_hv(s); }
+      double nh,nv; if(dirs[k]<0){ nh=0; nv=0; } else { { double c,sn; lendir(dirs[k],&c,&sn); nh=sp*c; nv=-sp*sn; } } s->hs+=nh; s->vs+=nv; sync_hv(s); }
     else { if(dirs[k]<0){ s->spd=0; } else { s->dir=dirs[k]; s->spd=sp; } sync_sd(s); } }
   return vnum(0); }
 FN(action_timeline_set){ Inst*s=c->self; s->tl=(int)NARG(0); s->tl_pos=NARG(1); s->tl_run=!truth(ARG(2)); return vnum(0); }  /* 0 = start at once (the game passes 0 and relies on it) */
@@ -347,15 +403,28 @@ static void draw_spr(int si,double frame,double x,double y,double xs,double ys,d
 FN(draw_sprite){ Inst*s=c->self; double fr=NARG(1); if(fr<0) fr=s->ii; draw_spr((int)NARG(0),fr,NARG(2),NARG(3),1,1,0,0xFFFFFF,1); return vnum(0); }
 FN(draw_sprite_ext){ Inst*s=c->self; double fr=NARG(1); if(fr<0) fr=s->ii;
   draw_spr((int)NARG(0),fr,NARG(2),NARG(3),NARG(4),NARG(5),NARG(6),(uint32_t)(long long)NARG(7),NARG(8)); return vnum(0); }
+/* ---- text: GameMaker draws one line per '#'/newline; optional word wrapping keeps long strings (e.g. player names) on screen ---- */
+int g_wrap_text=1;
+static double glyph_adv(Font*f,unsigned char ch){ int gi=f->map[ch]; return gi>=0?f->g[gi].shift:0; }
+static void draw_line(Font*f,const char*a,const char*b,double x0,double y){
+  double wd=0; for(const char*q=a;q<b;q++) wd+=glyph_adv(f,(unsigned char)*q);
+  double x=x0-(E.dhalign==1?wd/2:(E.dhalign==2?wd:0));
+  for(const char*q=a;q<b;q++){ int gi=f->map[(unsigned char)*q]; if(gi<0) continue; Glyph*G=&f->g[gi];
+    if(G->w&&G->h){ TPag t=*f->tp; t.sx=f->tp->sx+G->x; t.sy=f->tp->sy+G->y; t.sw=G->w; t.sh=G->h; submit(&t,x+G->offset,y,G->w,G->h,x,y,0,E.dcolor,1); }
+    x+=G->shift; } }
 FN(draw_text){
   if(E.dfont<0||E.dfont>=D.nfont) return vnum(0); Font*f=&D.font[E.dfont]; const char*s=ARG(2).s?ARG(2).s:num_to_str(NARG(2)); double x0=NARG(0),y=NARG(1);
-  const char*p=s; uint8_t r,g,b; col(E.dcolor,&r,&g,&b); (void)r;(void)g;(void)b;
-  while(*p){ const char*e=p; double wd=0; while(*e&&*e!='\n'&&!(*e=='#'&&(e==s||e[-1]!='\\'))){ int gi=f->map[(uint8_t)*e]; if(gi>=0) wd+=f->g[gi].shift; e++; }
-    double x=x0-(E.dhalign==1?wd/2:(E.dhalign==2?wd:0));
-    for(const char*q=p;q<e;q++){ int gi=f->map[(uint8_t)*q]; if(gi<0) continue; Glyph*G=&f->g[gi];
-      if(G->w&&G->h){ TPag t=*f->tp; t.sx=f->tp->sx+G->x; t.sy=f->tp->sy+G->y; t.sw=G->w; t.sh=G->h; submit(&t,x+G->offset,y,G->w,G->h,x,y,0,E.dcolor,1); }
-      x+=G->shift; }
-    y+=f->size*1.25; p=*e?e+1:e; }
+  double maxw=g_wrap_text?(LOGICAL_W-40)/E.tsc:1e12, lh=f->size*1.25; const char*p=s;
+  while(*p){
+    const char*e=p; while(*e&&*e!='\n'&&!(*e=='#'&&(e==s||e[-1]!='\\'))) e++;       /* explicit line [p,e) */
+    const char*a=p;
+    for(;;){                                                                          /* wrap [a,e) into visual lines */
+      double w=0; const char*q=a,*lastsp=NULL;
+      while(q<e){ double adv=glyph_adv(f,(unsigned char)*q); if(w+adv>maxw&&q>a) break; w+=adv; if(*q==' ') lastsp=q; q++; }
+      const char*end,*next;
+      if(q>=e){ end=e; next=e; } else if(lastsp&&lastsp>a){ end=lastsp; next=lastsp+1; } else { end=q; next=q; }   /* break at a space, else mid-word */
+      draw_line(f,a,end,x0,y); y+=lh; a=next; if(a>=e) break; }
+    p=*e?e+1:e; }
   return vnum(0); }
 
 static void register_fns(void){
@@ -382,7 +451,7 @@ static void register_fns(void){
 static void clear_instances(void){ for(int k=0;k<nI;k++){ free(I[k]->uv); free(I[k]); } nI=0; }
 static void enter_room(int r){
   if(E.room>=0&&E.room<D.nroom){ for(int k=0;k<nI;k++) if(!I[k]->dead) run_event(I[k],7,5); }
-  clear_instances(); E.room=r; E.next_room=-1; Room*rm=&D.room[r]; E.relative=0;
+  audio_hold=1; clear_instances(); E.room=r; E.next_room=-1; Room*rm=&D.room[r]; E.relative=0;
   for(int k=0;k<MAX_BG;k++){ RoomBg*b=&rm->bg[k]; E.bgvis[k]=b->enabled; E.bgidx[k]=b->bg; E.bgfg[k]=b->fg; E.bgx[k]=b->x; E.bgy[k]=b->y; E.bghs[k]=b->hspd; E.bgvs[k]=b->vspd;
     E.bgxs[k]=E.bgys[k]=1; E.bgblend[k]=0xFFFFFF; E.bgalpha[k]=1; }
   E.bgcolor=rm->bgcol;
@@ -395,6 +464,7 @@ static void enter_room(int r){
   for(int k=first;k<last;k++){ Inst*i=I[k]; run_code(cc[k-first],i,NULL); run_event(i,0,0); }
   free(cc);
   if(rm->cc>=0) run_code(rm->cc,&dummy,NULL);
+  { uint8_t keep[64],k2[64]; room_pages(r,keep); room_pages(r+1,k2); for(int p=0;p<64;p++) keep[p]|=k2[p]; tex_discard_unused(keep); prefetch_room(r+1); }
   if(g_verbose) fprintf(stderr,"[room] entered %s (%d), %d instances\n",rm->name,r,engine_ninst());
 }
 void engine_goto_room(int r){ if(r>=0&&r<D.nroom) enter_room(r); }
@@ -433,7 +503,7 @@ static void step(void){
   n=nI; for(int k=0;k<n;k++){ Inst*i=I[k]; if(i->dead) continue;                           /* motion + animation */
     i->xp=i->x; i->yp=i->y;
     if(i->fric!=0&&i->spd!=0){ double s=i->spd-i->fric; if(s<0)s=0; i->spd=s; sync_sd(i); }
-    if(i->grav!=0){ double r=i->gdir*M_PI/180; i->hs+=i->grav*cos(r); i->vs-=i->grav*sin(r); sync_hv(i); }
+    if(i->grav!=0){ double c,sn; lendir(i->gdir,&c,&sn); i->hs+=i->grav*c; i->vs-=i->grav*sn; sync_hv(i); }
     i->x+=i->hs; i->y+=i->vs;
     Sprite*s=(i->sprite>=0&&i->sprite<D.nspr)?&D.spr[i->sprite]:NULL;
     if(s&&s->nframes>0&&i->isp!=0){ i->ii+=i->isp; int wrapped=0; if(i->ii>=s->nframes){ i->ii=fmod(i->ii,s->nframes); wrapped=1; } else if(i->ii<0){ i->ii=fmod(i->ii,s->nframes)+s->nframes; wrapped=1; }
@@ -523,3 +593,5 @@ int engine_obj_count(const char*name){ int o=obj_by_name(name),n=0; if(o<0) retu
 int engine_set_global_str(const char*name,const char*v){ for(int i=0;i<D.nvar;i++) if(!strcmp(D.var[i].name,name)){ gv[i]=vstr(str_intern(v)); return 0; } return -1; }
 void engine_dump_instances(void){ for(int k=0;k<nI;k++){ Inst*i=I[k]; if(i->dead) continue; Object*o=&D.obj[i->obj]; 
   fprintf(stderr,"  inst %-26s x=%7.1f y=%6.1f spr=%-26s idx=%.1f vis=%d depth=%d alpha=%.2f blend=%06x xs=%.1f ys=%.1f\n",o->name,i->x,i->y,(i->sprite>=0&&i->sprite<D.nspr)?D.spr[i->sprite].name:"-",i->ii,i->visible,i->depth,i->alpha,i->blend,i->xs,i->ys); } }
+double engine_obj_var(const char*obj,const char*var,int*isstr){ int o=obj_by_name(obj); Inst*i=o>=0?inst_first_obj(o):NULL; if(!i) return -9999;
+  for(int k=0;k<D.nvar;k++) if(!strcmp(D.var[k].name,var)){ if(vbi[k]) return -9998; if(isstr) *isstr=i->uv[k].s!=NULL; return i->uv[k].s?0:i->uv[k].d; } return -9997; }

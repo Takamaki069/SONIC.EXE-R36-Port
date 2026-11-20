@@ -143,11 +143,26 @@ int data_load(const char *path){
 }
 
 /* ---------- PNG (RGBA8, non-interlaced) ---------- */
-static inline int paeth(int a,int b,int c){ int p=a+b-c,pa=abs(p-a),pb=abs(p-b),pc=abs(p-c); return (pa<=pb&&pa<=pc)?a:(pb<=pc?b:c); }
+static inline int iabs(int v){ return v<0?-v:v; }
+static inline int paeth(int a,int b,int c){ int pa=iabs(b-c),pb=iabs(a-c),pc=iabs(a+b-2*c); return (pa<=pb&&pa<=pc)?a:(pb<=pc?b:c); }
+/* unfilter one row in place; up = previous (already unfiltered) row, or an all-zero row for the first one. bpp = 4 */
+static int unfilter_row(int f,uint8_t*cur,const uint8_t*up,int n){
+  int i;
+  switch(f){
+    case 0: break;
+    case 1: for(i=4;i<n;i++) cur[i]+=cur[i-4]; break;
+    case 2: for(i=0;i<n;i++) cur[i]+=up[i]; break;
+    case 3: for(i=0;i<4;i++) cur[i]+=up[i]>>1;
+            for(i=4;i<n;i++) cur[i]+=(cur[i-4]+up[i])>>1; break;
+    case 4: for(i=0;i<4;i++) cur[i]+=up[i];                       /* paeth(0,b,0) == b */
+            for(i=4;i<n;i+=4){                                    /* one pixel (4 channels) per iteration */
+              cur[i]  +=paeth(cur[i-4],up[i],up[i-4]);   cur[i+1]+=paeth(cur[i-3],up[i+1],up[i-3]);
+              cur[i+2]+=paeth(cur[i-2],up[i+2],up[i-2]); cur[i+3]+=paeth(cur[i-1],up[i+3],up[i-1]); } break;
+    default: return -1; }
+  return 0; }
 uint8_t *png_decode_rgba(const uint8_t *png,size_t len,int *pw,int *ph){
   if(len<33||memcmp(png,"\x89PNG\r\n\x1a\n",8)) return NULL;
   int w=0,h=0; size_t p=8; size_t idatTotal=0;
-  /* pass 1: sizes */
   for(;;){ if(p+12>len) return NULL; uint32_t l=__builtin_bswap32(rd32(png+p)); const uint8_t*t=png+p+4;
     if(!memcmp(t,"IHDR",4)){ w=__builtin_bswap32(rd32(png+p+8)); h=__builtin_bswap32(rd32(png+p+12)); if(png[p+16]!=8||png[p+17]!=6||png[p+20]!=0) return NULL; }
     else if(!memcmp(t,"IDAT",4)) idatTotal+=l;
@@ -157,19 +172,10 @@ uint8_t *png_decode_rgba(const uint8_t *png,size_t len,int *pw,int *ph){
   for(;;){ uint32_t l=__builtin_bswap32(rd32(png+p)); const uint8_t*t=png+p+4;
     if(!memcmp(t,"IDAT",4)){ memcpy(zin+zp,png+p+8,l); zp+=l; } else if(!memcmp(t,"IEND",4)) break; p+=12+l; }
   size_t stride=(size_t)w*4+1, rawsz=stride*h;
-  uint8_t*raw=malloc(rawsz); if(!raw){ free(zin); return NULL; }
+  uint8_t*raw=malloc(rawsz); uint8_t*zero=calloc(1,(size_t)w*4+4); if(!raw||!zero){ free(zin); free(raw); free(zero); return NULL; }
   z_stream z; memset(&z,0,sizeof z); inflateInit(&z); z.next_in=zin; z.avail_in=zp; z.next_out=raw; z.avail_out=rawsz;
   int rc=inflate(&z,Z_FINISH); inflateEnd(&z); free(zin);
-  if(rc!=Z_STREAM_END||z.total_out!=rawsz){ free(raw); return NULL; }
-  /* unfilter in place (bpp 4) */
-  for(int y=0;y<h;y++){ uint8_t*row=raw+y*stride; int f=row[0]; uint8_t*cur=row+1; uint8_t*up=y?(raw+(y-1)*stride+1):NULL; int n=w*4;
-    switch(f){
-      case 0: break;
-      case 1: for(int i=4;i<n;i++) cur[i]+=cur[i-4]; break;
-      case 2: if(up) for(int i=0;i<n;i++) cur[i]+=up[i]; break;
-      case 3: for(int i=0;i<n;i++){ int a=i>=4?cur[i-4]:0, b=up?up[i]:0; cur[i]+=(a+b)>>1; } break;
-      case 4: for(int i=0;i<n;i++){ int a=i>=4?cur[i-4]:0, b=up?up[i]:0, c=(up&&i>=4)?up[i-4]:0; cur[i]+=paeth(a,b,c); } break;
-      default: free(raw); return NULL; } }
+  if(rc!=Z_STREAM_END||z.total_out!=rawsz){ free(raw); free(zero); return NULL; }
+  for(int y=0;y<h;y++){ uint8_t*row=raw+y*stride; if(unfilter_row(row[0],row+1,y?(raw+(size_t)(y-1)*stride+1):zero,w*4)){ free(raw); free(zero); return NULL; } }
   for(int y=0;y<h;y++) memmove(raw+(size_t)y*w*4,raw+y*stride+1,(size_t)w*4);
-  *pw=w; *ph=h; return raw;   /* (buffer slightly larger than needed; fine) */
-}
+  free(zero); *pw=w; *ph=h; return raw; }

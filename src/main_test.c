@@ -33,11 +33,11 @@ static void dump(const char*prefix,int f){ char n[256]; snprintf(n,sizeof n,"%s_
 
 int main(int argc,char**argv){
   if(argc<2){ fprintf(stderr,"usage: %s data.win [-g var=val] [-p x:y] [-t N] [-f N] [-r room] [-k f:key:1|0,...] [-d f,f,..] [-o prefix] [-v]\n",argv[0]); return 1; }
-  int frames=120,room=-1; const char*gset[16]; int ngset=0; const char*ppos=0; int trace=0; int dumpinst=-1; const char*keys="",*dumps="",*prefix="/tmp/frame";
+  int frames=120,room=-1; const char*gset[16]; int ngset=0; const char*ppos=0; int trace=0; int dumpinst=-1; const char*pname=0; const char*keys="",*dumps="",*prefix="/tmp/frame";
   for(int i=2;i<argc;i++){ if(!strcmp(argv[i],"-f")) frames=atoi(argv[++i]); else if(!strcmp(argv[i],"-r")) room=atoi(argv[++i]); else if(!strcmp(argv[i],"-k")) keys=argv[++i];
     else if(!strcmp(argv[i],"-d")) dumps=argv[++i]; else if(!strcmp(argv[i],"-o")) prefix=argv[++i]; else if(!strcmp(argv[i],"-v")) g_verbose=1;
-    else if(!strcmp(argv[i],"-g")) gset[ngset++]=argv[++i]; else if(!strcmp(argv[i],"-p")) ppos=argv[++i]; else if(!strcmp(argv[i],"-t")) trace=atoi(argv[++i]); else if(!strcmp(argv[i],"-i")) dumpinst=atoi(argv[++i]); }
-  if(data_load(argv[1])) return 1; PL=&tp; t_clip(0,0,0,0);
+    else if(!strcmp(argv[i],"-g")) gset[ngset++]=argv[++i]; else if(!strcmp(argv[i],"-p")) ppos=argv[++i]; else if(!strcmp(argv[i],"-t")) trace=atoi(argv[++i]); else if(!strcmp(argv[i],"-i")) dumpinst=atoi(argv[++i]); else if(!strcmp(argv[i],"-n")) pname=argv[++i]; else if(!strcmp(argv[i],"-w")) g_wrap_text=atoi(argv[++i]); }
+  if(data_load(argv[1])) return 1; engine_prefetch_start(); if(pname) g_player_name=pname; PL=&tp; t_clip(0,0,0,0);
   g_tex_budget_mb=100000;
   if(engine_init(0)) return 1;
   for(int g=0;g<ngset;g++){ char n[64]; double v; if(sscanf(gset[g],"%63[^=]=%lf",n,&v)==2) engine_set_global(n,v); else { char sv[64]; if(sscanf(gset[g],"%63[^=]=%63s",n,sv)==2) engine_set_global_str(n,sv); } }
@@ -48,9 +48,10 @@ int main(int argc,char**argv){
   for(int f=0;f<frames;f++){
     char tmp[4096]; strcpy(tmp,kb); for(char*t=strtok(tmp,",");t;t=strtok(0,",")){ int ff,k,d; if(sscanf(t,"%d:%d:%d",&ff,&k,&d)==3&&ff==f) cur[k&255]=d; }
     if(f==2&&px_set>=0) engine_set_pos("obj_playerMain",px_set,py_set);
-    engine_frame(cur);
+    engine_frame(cur); engine_present_done();
     if(f==dumpinst){ fprintf(stderr,"[instances @ frame %d]\n",f); engine_dump_instances(); }
-    if(trace&&f%trace==0){ double x,y,hs,vx,vy; if(engine_obj_info("obj_playerMain",&x,&y,&hs)){ engine_view_pos(&vx,&vy); fprintf(stderr,"[trace] players=%d ",engine_obj_count("obj_playerMain")); fprintf(stderr,"[trace] f=%d player x=%.1f y=%.1f hs=%.2f view=%.1f,%.1f  player-view=%.1f\n",f,x,y,hs,vx,vy,x-vx); } }
+    if(trace&&f%trace==0){ double cx,cy,ch; if(engine_obj_info("obj_sonicChaseTails",&cx,&cy,&ch)) fprintf(stderr,"[chase] f=%d sonic x=%.1f y=%.1f hs=%.2f\n",f,cx,cy,ch); double x,y,hs,vx,vy; if(engine_obj_info("obj_playerMain",&x,&y,&hs)){ engine_view_pos(&vx,&vy); { int is; fprintf(stderr,"[v] var_speed=%.6f var_move=%.0f maxspeed=%.2f gravity? ",engine_obj_var("obj_playerMain","var_speed",&is),engine_obj_var("obj_playerMain","var_move",&is),engine_obj_var("obj_playerMain","var_maxspeed",&is)); }
+ fprintf(stderr,"[trace] players=%d ",engine_obj_count("obj_playerMain")); fprintf(stderr,"[trace] f=%d player x=%.1f y=%.1f hs=%.2f view=%.1f,%.1f  player-view=%.1f\n",f,x,y,hs,vx,vy,x-vx); } }
     if(engine_room()!=lastroom){ fprintf(stderr,"[test] frame %d: room %d -> %d (%s), %d instances\n",f,lastroom,engine_room(),D.room[engine_room()].name,engine_ninst()); lastroom=engine_room(); }
     char tmp2[1024]; strcpy(tmp2,db); for(char*t=strtok(tmp2,",");t;t=strtok(0,",")) if(atoi(t)==f) dump(prefix,f);
   }
