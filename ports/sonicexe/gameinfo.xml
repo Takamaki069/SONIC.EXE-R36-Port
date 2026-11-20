@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='utf-8'?>
+<gameList>
+  <game>
+    <path>./Sonic.EXE.sh</path>
+    <name>Sonic.EXE</name>
+    <desc>A terrifying horror experience based on the legendary Sonic.EXE creepypasta. Can you survive the nightmare?</desc>
+    <image>./sonicexe/screenshot.png</image>
+    <genre>Horror</genre>
+  </game>
+</gameList>

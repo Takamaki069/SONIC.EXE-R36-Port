@@ -1,0 +1,32 @@
+{
+    "version": 4,
+    "name": "sonicexe.zip",
+    "items": [
+        "Sonic.EXE.sh",
+        "sonicexe"
+    ],
+    "items_opt": null,
+    "attr": {
+        "title": "Sonic.EXE",
+        "porter": [
+            "AnubisWithCoffee"
+        ],
+        "desc": "Experience the horror of Sonic.EXE in this handheld Linux port.",
+        "desc_md": null,
+        "inst": "- Install the port via PortMaster.\n- Obtain a copy of the original SONIC.EXE game file.\n- Copy SONIC.EXE into the sonicexe folder.\n- Launch Sonic.EXE. The game data will be extracted automatically on first launch.\n- Enjoy!",
+        "inst_md": null,
+        "genres": [
+            "horror",
+            "platformer"
+        ],
+        "image": {},
+        "rtr": false,
+        "exp": false,
+        "runtime": [],
+        "reqs": [],
+        "arch": [
+            "aarch64"
+        ],
+        "min_glibc": ""
+    }
+}
