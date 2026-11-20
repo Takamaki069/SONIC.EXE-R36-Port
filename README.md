@@ -1,4 +1,4 @@
-<img src="Sonic.EXE R36 Port Nightmare.png" width="1024" height="384">
+<img src="Git Banner Art.png" width="1024" height="384">
 
 # Sonic.exe R36 Port
 
