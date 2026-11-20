@@ -1,4 +1,4 @@
-<img src="Sonic.exe R36 Port Horror Poster.png" width="392" height="392">
+<img src="Sonic.EXE R36 Port Nightmare.png" width="1024" height="384">
 
 # sonicexe-runner
 
