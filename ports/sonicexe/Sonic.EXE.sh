@@ -27,19 +27,19 @@ get_controls
 export GAMEDIR="/$directory/ports/sonicexe"
 cd "$GAMEDIR" || exit 1
 
-# Display messages
+# Display output
 printf "\033c" > /dev/tty0
 
 say() {
     printf "%b\n" "$1" > /dev/tty0
 }
 
-# Check extracted game data
+# Verify extracted game data
 valid_data() {
     [ -s data.win ] && [ "$(head -c4 data.win 2>/dev/null)" = "FORM" ]
 }
 
-# First launch: extract original game files
+# First launch: extract game data
 if ! valid_data; then
 
     if [ -f SONIC.EXE ]; then
@@ -61,16 +61,16 @@ if ! valid_data; then
             sleep 10
             pm_finish
             exit 1
+
         fi
 
-        say "Extraction complete!"
+        say "Extraction complete."
 
     else
 
         say "Sonic.EXE: Game files not found."
-        say "Please copy SONIC.EXE into:"
+        say "Copy SONIC.EXE into:"
         say "$GAMEDIR"
-        say "Then restart the game."
 
         sleep 8
         pm_finish
@@ -79,7 +79,7 @@ if ! valid_data; then
     fi
 fi
 
-# Remove unnecessary Windows files after successful extraction
+# Cleanup after successful extraction
 if valid_data && [ -f snd_bgmTitle.ogg ]; then
 
     freed=0
@@ -100,14 +100,14 @@ if valid_data && [ -f snd_bgmTitle.ogg ]; then
 
 fi
 
-# Configure SDL
+# SDL configuration
 export SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1
 export SDL_AUDIODRIVER=${SDL_AUDIODRIVER:-alsa}
 
-# Launch game
+# Start game
 say "Starting Sonic.EXE..."
 
-"$TASKSET" "$GAMEDIR/sonicexe" "$GAMEDIR" > log.txt 2>&1
+$TASKSET "$GAMEDIR/sonicexe" "$GAMEDIR" > log.txt 2>&1
 
 # Return to PortMaster
 printf "\033c" > /dev/tty0
