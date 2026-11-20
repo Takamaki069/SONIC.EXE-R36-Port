@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdint.h>
 typedef uint8_t u8; typedef uint16_t u16; typedef uint32_t u32; typedef int32_t i32;
 static u8 *in; static size_t inlen, ipos;
@@ -53,29 +54,41 @@ static u8 *lzx_decode(int wb,size_t total){
   memcpy(fin+fend-fsz,out+fend-fsz,fsz);   /* E8 fix-up runs on a copy: matches must see untranslated history */
   if(intel&&ifs&&frame<32768&&fsz>10){ u8*dp=fin+fend-fsz,*de=dp+fsz-10; i32 cur=icur; while(dp<de){ if(*dp++!=0xE8){cur++;continue;} i32 abs=dp[0]|dp[1]<<8|dp[2]<<16|(i32)((u32)dp[3]<<24);
      if(abs>=-cur&&abs<(i32)ifs){ i32 rel=abs>=0?abs-cur:abs+ifs; dp[0]=rel;dp[1]=rel>>8;dp[2]=rel>>16;dp[3]=rel>>24; } dp+=4; cur+=5; } }
-  icur+=fsz; frame++; }
- free(out); return fin; }
+  icur+=fsz; frame++;
+  if((frame&31)==0||op>=total){ fprintf(stderr,"\r  Decompressing game data: %3d%%",(int)(op*100/total)); fflush(stderr); } }
+ fprintf(stderr,"\n"); free(out); return fin; }
 
 static u32 le32(const u8*p){ return p[0]|p[1]<<8|p[2]<<16|(u32)p[3]<<24; } static u16 le16(const u8*p){ return p[0]|p[1]<<8; }
 static u32 cabsum(const u8*d,size_t n,u32 seed){ u32 s=seed; size_t i=0; for(;n-i>=4;i+=4) s^=le32(d+i); u32 t=0; size_t r=n-i; if(r==3) t=(d[i]<<16)|(d[i+1]<<8)|d[i+2]; else if(r==2) t=(d[i]<<8)|d[i+1]; else if(r==1) t=d[i]; return s^t; }
 
 int main(int argc,char**argv){
- if(argc<3){ fprintf(stderr,"usage: %s SONIC.EXE outdir\n  Extracts the cabinet embedded in an IExpress self-extractor (LZX).\n",argv[0]); return 1; }
- FILE*f=fopen(argv[1],"rb"); if(!f){ perror(argv[1]); return 1; } fseek(f,0,SEEK_END); long fs=ftell(f); fseek(f,0,SEEK_SET); u8*d=malloc(fs); if(fread(d,1,fs,f)!=(size_t)fs){ fprintf(stderr,"read error\n"); return 1; } fclose(f);
+ int game_only=0; const char*in_path=NULL,*out_dir=NULL;
+ for(int i=1;i<argc;i++){ if(!strcmp(argv[i],"--game-only")) game_only=1; else if(!in_path) in_path=argv[i]; else if(!out_dir) out_dir=argv[i]; }
+ if(!in_path||!out_dir){ fprintf(stderr,"usage: %s [--game-only] SONIC.EXE outdir\n  Extracts the cabinet embedded in an IExpress self-extractor (LZX).\n  --game-only  skip the Windows-only files (*.exe, *.dll)\n",argv[0]); return 1; }
+ fprintf(stderr,"Sonic.EXE data extractor\n");
+ FILE*f=fopen(in_path,"rb"); if(!f){ perror(in_path); return 1; } fseek(f,0,SEEK_END); long fs=ftell(f); fseek(f,0,SEEK_SET);
+ fprintf(stderr,"Reading %s (%ld MB)...\n",in_path,fs>>20);
+ u8*d=malloc(fs); if(!d||fread(d,1,fs,f)!=(size_t)fs){ fprintf(stderr,"ERROR: could not read %s\n",in_path); return 1; } fclose(f);
  long co=-1; for(long i=0;i+36<fs;i++) if(!memcmp(d+i,"MSCF\0\0\0\0",8)&&le32(d+i+8)<=(u32)(fs-i)&&le32(d+i+8)>1000){ co=i; break; }
- if(co<0){ fprintf(stderr,"no cabinet found in %s\n",argv[1]); return 1; }
+ if(co<0){ fprintf(stderr,"ERROR: no game archive found in %s (is it the original SONIC.EXE?)\n",in_path); return 1; }
  const u8*c=d+co; u32 coffFiles=le32(c+16); int nfold=le16(c+26), nfiles=le16(c+28), flags=le16(c+30);
- if(nfold!=1||flags!=0){ fprintf(stderr,"unsupported cabinet layout (folders=%d flags=%d)\n",nfold,flags); return 1; }
- u32 dataoff=le32(c+36); int nd=le16(c+40); int comp=le16(c+42); if((comp&15)!=3){ fprintf(stderr,"unsupported compression type %d (need LZX)\n",comp&15); return 1; }
- int wb=(comp>>8)&31; if(wb<15||wb>21){ fprintf(stderr,"bad window size\n"); return 1; }
+ if(nfold!=1||flags!=0){ fprintf(stderr,"ERROR: unsupported archive layout (folders=%d flags=%d)\n",nfold,flags); return 1; }
+ u32 dataoff=le32(c+36); int nd=le16(c+40); int comp=le16(c+42); if((comp&15)!=3){ fprintf(stderr,"ERROR: unsupported compression type %d (need LZX)\n",comp&15); return 1; }
+ int wb=(comp>>8)&31; if(wb<15||wb>21){ fprintf(stderr,"ERROR: bad window size\n"); return 1; }
  in=malloc(fs); inlen=0; size_t p=co+dataoff,total=0; int badsum=0;
+ fprintf(stderr,"Checking archive integrity (%d blocks)...\n",nd);
  for(int i=0;i<nd;i++){ u32 cs=le32(d+p); u16 cb=le16(d+p+4),cu=le16(d+p+6); if(cs&&cabsum(d+p+4,4,cabsum(d+p+8,cb,0))!=cs) badsum++; memcpy(in+inlen,d+p+8,cb); inlen+=cb; p+=8+cb; total+=cu; }
- fprintf(stderr,"cabinet at 0x%lx: %d files, %d data blocks, %zu bytes uncompressed%s\n",co,nfiles,nd,total,badsum?" (CHECKSUM ERRORS: input damaged)":"");
- u8*fin=lzx_decode(wb,total); if(!fin) return 1;
- char cmd[1200]; snprintf(cmd,sizeof cmd,"mkdir -p '%s'",argv[2]); if(system(cmd)){} 
- size_t q=co+coffFiles;
+ if(badsum){ fprintf(stderr,"ERROR: %d damaged blocks - the file is corrupt, please re-copy SONIC.EXE. Nothing was extracted.\n",badsum); return 2; }
+ fprintf(stderr,"Archive OK: %d files, %zu MB unpacked.\n",nfiles,total>>20);
+ u8*fin=lzx_decode(wb,total); if(!fin){ fprintf(stderr,"ERROR: decompression failed\n"); return 3; }
+ char cmd[1200]; snprintf(cmd,sizeof cmd,"mkdir -p '%s'",out_dir); if(system(cmd)){}
+ fprintf(stderr,"Writing files:\n"); size_t q=co+coffFiles; int written=0; size_t wbytes=0;
  for(int i=0;i<nfiles;i++){ u32 sz=le32(d+q),off=le32(d+q+4); q+=16; const char*nm=(const char*)d+q; q+=strlen(nm)+1;
-  const char*b=strrchr(nm,'\\'); b=b?b+1:nm; char path[1100]; snprintf(path,sizeof path,"%s/%s",argv[2],b);
-  if((size_t)off+sz>total){ fprintf(stderr,"file %s out of range\n",nm); return 1; }
-  FILE*o=fopen(path,"wb"); if(!o){ perror(path); return 1; } fwrite(fin+off,1,sz,o); fclose(o); fprintf(stderr,"  %-28s %10u bytes\n",b,sz); }
+  const char*b=strrchr(nm,'\\'); b=b?b+1:nm; size_t bl=strlen(b);
+  if(game_only&&bl>4&&(!strcasecmp(b+bl-4,".exe")||!strcasecmp(b+bl-4,".dll"))){ fprintf(stderr,"  %-28s skipped (Windows-only)\n",b); continue; }
+  char path[1100]; snprintf(path,sizeof path,"%s/%s",out_dir,b);
+  if((size_t)off+sz>total){ fprintf(stderr,"ERROR: file %s out of range\n",nm); return 3; }
+  FILE*o=fopen(path,"wb"); if(!o){ perror(path); return 3; } if(fwrite(fin+off,1,sz,o)!=sz){ fprintf(stderr,"ERROR: disk full while writing %s\n",b); fclose(o); return 3; } fclose(o);
+  written++; wbytes+=sz; fprintf(stderr,"  %-28s %6.1f MB\n",b,sz/1048576.0); }
+ fprintf(stderr,"Done: %d files (%zu MB) written to %s\n",written,wbytes>>20,out_dir);
  return 0; }

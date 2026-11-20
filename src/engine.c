@@ -5,7 +5,7 @@
 #include <math.h>
 #include <time.h>
 
-Platform *PL; int g_tex_budget_mb=160, g_verbose=0, g_hide_touch=1;
+const char *g_player_name="player"; Platform *PL; int g_tex_budget_mb=160, g_verbose=0, g_hide_touch=1;
 
 /* ================= builtin variable ids ================= */
 enum { BV_NONE=0, BV_X,BV_Y,BV_XPREV,BV_YPREV,BV_HSPEED,BV_VSPEED,BV_SPEED,BV_DIRECTION,BV_FRICTION,BV_GRAVITY,BV_GDIR,
@@ -100,7 +100,7 @@ static int collide_at(Inst*a,double ax,double ay,Inst*b){
 static int is_solid(Inst*i){ return i->solid; }
 
 /* ================= VM ================= */
-typedef struct { Inst *self,*other; Value args[16]; int nargs; Value loc[MAX_VARS]; } Ctx;
+typedef struct { Inst *self,*other; Value args[16]; int nargs; int relative; Value loc[MAX_VARS]; } Ctx;
 typedef Value (*Fn)(Ctx*,Value*,int);
 static Value vm_exec(int code,Inst*self,Inst*other,const Value*args,int nargs);
 static void run_code(int code,Inst*self,Inst*other){ if(code>=0&&code<D.ncode) vm_exec(code,self,other,NULL,0); }
@@ -301,17 +301,17 @@ FN(audio_stop_music){ PL->music_stop(); return vnum(0); }
 FN(audio_stop_sound){ int s=(int)NARG(0); if(s>=0&&s<D.nsnd){ if(D.snd[s].embedded) PL->sfx_stop(s); else PL->music_stop(); } return vnum(0); }
 FN(action_sound){ play_snd((int)NARG(0),truth(ARG(1))); return vnum(0); }
 FN(action_end_sound){ return f_audio_stop_sound(c,a,n); }
-FN(action_set_relative){ E.relative=truth(ARG(0)); return vnum(0); }
+FN(action_set_relative){ c->relative=truth(ARG(0)); return vnum(0); }
 FN(action_sprite_set){ Inst*s=c->self; int sp=(int)NARG(0); if(sp>=0) s->sprite=sp; double si=NARG(1); if(si>=0) s->ii=si; s->isp=NARG(2); return vnum(0); }
-FN(action_set_alarm){ int k=(int)NARG(1); if(k>=0&&k<12){ if(E.relative) c->self->alarm[k]+=(int)NARG(0); else c->self->alarm[k]=(int)NARG(0); } return vnum(0); }
+FN(action_set_alarm){ int k=(int)NARG(1); if(k>=0&&k<12){ if(c->relative) c->self->alarm[k]+=(int)NARG(0); else c->self->alarm[k]=(int)NARG(0); } return vnum(0); }
 FN(action_effect){ return vnum(0); }
 FN(action_kill_object){ inst_destroy(c->self); return vnum(0); }
-FN(action_create_object){ double x=NARG(1),y=NARG(2); if(E.relative){ x+=c->self->x; y+=c->self->y; } inst_create((int)NARG(0),x,y); return vnum(0); }
+FN(action_create_object){ double x=NARG(1),y=NARG(2); if(c->relative){ x+=c->self->x; y+=c->self->y; } inst_create((int)NARG(0),x,y); return vnum(0); }
 FN(action_next_room){ return f_room_goto_next(c,a,n); }
 FN(action_another_room){ return f_room_goto(c,a,n); }
 FN(action_move){ Inst*s=c->self; const char*d=ARG(0).s?ARG(0).s:""; double sp=NARG(1); static const int dirs[9]={225,270,315,180,-1,0,135,90,45};
   int cand[9],nc=0; for(int k=0;k<9&&d[k];k++) if(d[k]=='1') cand[nc++]=k;
-  if(nc){ int k=cand[nc>1?rand()%nc:0]; if(E.relative){ double r=0; (void)r;
+  if(nc){ int k=cand[nc>1?rand()%nc:0]; if(c->relative){
       double nh,nv; if(dirs[k]<0){ nh=0; nv=0; } else { nh=sp*cos(dirs[k]*M_PI/180); nv=-sp*sin(dirs[k]*M_PI/180); } s->hs+=nh; s->vs+=nv; sync_hv(s); }
     else { if(dirs[k]<0){ s->spd=0; } else { s->dir=dirs[k]; s->spd=sp; } sync_sd(s); } }
   return vnum(0); }
@@ -327,7 +327,9 @@ FN(noop){ return vnum(0); }
 FN(string){ if(ARG(0).s) return ARG(0); return vstr(num_to_str(NARG(0))); }
 FN(choose){ if(n<=0) return vnum(0); return a[rand()%n]; }
 FN(make_colour_rgb){ return vnum((int)NARG(0)|((int)NARG(1)<<8)|((int)NARG(2)<<16)); }
-FN(environment_get_variable){ const char*k=ARG(0).s?ARG(0).s:""; const char*v=getenv(k); if(!v&&!strcmp(k,"USERNAME")) v=getenv("USER"); return vstr(str_intern(v?v:"")); }
+FN(environment_get_variable){ const char*k=ARG(0).s?ARG(0).s:""; const char*v;
+  if(!strcmp(k,"USERNAME")||!strcmp(k,"USER")||!strcmp(k,"LOGNAME")) v=g_player_name; else v=getenv(k);   /* the game greets the player by name */
+  return vstr(str_intern(v?v:"")); }
 
 /* ---- drawing ---- */
 static inline void col(uint32_t bgr,uint8_t*r,uint8_t*g,uint8_t*b){ *r=bgr&255; *g=(bgr>>8)&255; *b=(bgr>>16)&255; }
@@ -403,10 +405,13 @@ static void update_views(int snap){
     Inst*t=E.vobj[v]>=100000?inst_by_id(E.vobj[v]):inst_first_obj(E.vobj[v]); if(!t) continue;
     double l=t->x,r=t->x,tp=t->y,b=t->y;   /* follow the origin (stable); mask edges change every animation frame */
     double hb=rm->view[v].bh,vb=rm->view[v].bv,nx=E.vx[v],ny=E.vy[v];
+    if(hb>E.vw[v]/2) hb=E.vw[v]/2; if(vb>E.vh[v]/2) vb=E.vh[v]/2;   /* overlapping borders made the camera oscillate */
     if(l-hb<nx) nx=l-hb; else if(r+hb>nx+E.vw[v]) nx=r+hb-E.vw[v];
     if(tp-vb<ny) ny=tp-vb; else if(b+vb>ny+E.vh[v]) ny=b+vb-E.vh[v];
     if(nx>rm->w-E.vw[v]) nx=rm->w-E.vw[v]; if(nx<0) nx=0; if(ny>rm->h-E.vh[v]) ny=rm->h-E.vh[v]; if(ny<0) ny=0;
     double hs=rm->view[v].hs,vs=rm->view[v].vs;
+    if(hs>0&&fabs(t->hs)+1>hs) hs=fabs(t->hs)+1;     /* never lag further behind than the object's own speed */
+    if(vs>0&&fabs(t->vs)+1>vs) vs=fabs(t->vs)+1;
     if(!snap&&hs>=0&&fabs(nx-E.vx[v])>hs) nx=E.vx[v]+(nx>E.vx[v]?hs:-hs);
     if(!snap&&vs>=0&&fabs(ny-E.vy[v])>vs) ny=E.vy[v]+(ny>E.vy[v]?vs:-vs);
     /* safeguard: the speed limit may slow the camera but must never let the followed object leave the screen */
@@ -515,3 +520,6 @@ int engine_obj_info(const char*name,double*x,double*y,double*hs){ int o=obj_by_n
 void engine_set_pos(const char*name,double x,double y){ int o=obj_by_name(name); if(o<0) return; Inst*i=inst_first_obj(o); if(i){ i->x=x; i->y=y; } }
 void engine_view_pos(double*x,double*y){ *x=E.vx[0]; *y=E.vy[0]; }
 int engine_obj_count(const char*name){ int o=obj_by_name(name),n=0; if(o<0) return 0; for(int k=0;k<nI;k++) if(I[k]->obj==o&&!I[k]->dead) n++; return n; }
+int engine_set_global_str(const char*name,const char*v){ for(int i=0;i<D.nvar;i++) if(!strcmp(D.var[i].name,name)){ gv[i]=vstr(str_intern(v)); return 0; } return -1; }
+void engine_dump_instances(void){ for(int k=0;k<nI;k++){ Inst*i=I[k]; if(i->dead) continue; Object*o=&D.obj[i->obj]; 
+  fprintf(stderr,"  inst %-26s x=%7.1f y=%6.1f spr=%-26s idx=%.1f vis=%d depth=%d alpha=%.2f blend=%06x xs=%.1f ys=%.1f\n",o->name,i->x,i->y,(i->sprite>=0&&i->sprite<D.nspr)?D.spr[i->sprite].name:"-",i->ii,i->visible,i->depth,i->alpha,i->blend,i->xs,i->ys); } }

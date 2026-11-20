@@ -22,8 +22,9 @@ unpacks it anywhere (PC or device):
 
     make extract_sonic && ./extract_sonic SONIC.EXE gamefiles/
 
-(or just drop `SONIC.EXE` into the game folder on the device; the launcher unpacks it on first run).
-`Sonic7.exe` and `D3DX9_43.dll` in the output are Windows-only and unused.
+(or just drop `SONIC.EXE` into the game folder on the device). On first launch the launcher unpacks it, showing progress
+on screen, then **deletes `SONIC.EXE` and the Windows-only files** to save space (only if extraction succeeded; a damaged
+SONIC.EXE is detected before anything is written and is kept). Use `--game-only` to skip the Windows-only files by hand.
 
 ## 2. Build
 **On the device / any ARM64 Linux** (needs `build-essential libsdl2-dev libsdl2-mixer-dev zlib1g-dev`):
@@ -44,9 +45,10 @@ Copy `ports/Sonic.EXE.sh` to `/roms/ports/` (or `/roms2/ports/`) and make a fold
 Log output goes to `sonicexe/log.txt`.
 
 ## Controls
-D-pad **and** left stick = arrows, south button = Space (jump), east = X (interact), **Start** = Enter (confirms Data Select),
+D-pad **and** left stick = arrows, button 0 = Space (jump), button 1 = X (interact), **Start** = Enter (confirms Data Select),
 **Select** = Esc, L1/R1 = A/S. **Hold Start+Select (or L2+R2) ~1.5 s to quit.** Keyboard works too (F10 quits).
-Odroid-GO pads are auto-detected; the stick has a hysteresis dead zone (`deadzone` in `sonicexe.cfg`).
+Default raw layout is the Odroid-GO Super (d-pad 8-11, Select 12, Start 13); the stick has a hysteresis dead zone.
+The in-game greeting uses `name=` from `sonicexe.cfg` (default `player`).
 Remap in `sonicexe.cfg`. For controllers SDL doesn't recognise, run with `JOYDEBUG=1` to print raw button numbers.
 
 ## If the controller does nothing

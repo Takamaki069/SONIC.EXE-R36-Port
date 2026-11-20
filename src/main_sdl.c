@@ -11,9 +11,9 @@
 static SDL_Window *win; static SDL_Renderer *ren; static SDL_Texture *tex[64]; static const char *gamedir=".";
 enum { PA,PB,PX,PY,PL1,PR1,PSTART,PSELECT,PL2,PR2,PCOUNT };
 static int padmap[PCOUNT]={32,88,90,67,65,83,13,27,81,69};      /* A=space B=X X=Z Y=C L1=A R1=S start=enter select=esc L2=Q R2=E */
-static int joydebug=0, cfg_rawpad=0;
-static int rawmap[PCOUNT]={0,1,2,3,4,5,7,6,8,9};      /* raw joystick button index for A,B,X,Y,L1,R1,START,SELECT,L2,R2 */
-static int rawdpad[4]={-1,-1,-1,-1};                   /* raw button indices for dpad up,down,left,right (-1 = use hat/axes) */
+static int joydebug=0, cfg_rawpad=1;   /* raw joystick buttons are the default: handheld pads rarely have SDL controller mappings */
+static int rawmap[PCOUNT]={0,1,2,3,4,5,13,12,6,7};      /* raw joystick button index for A,B,X,Y,L1,R1,START,SELECT,L2,R2 */
+static int rawdpad[4]={8,9,10,11};                   /* raw button indices for dpad up,down,left,right (-1 = use hat/axes) */
 static int inlog=0, joy_cfg_touched=0, cfg_deadzone=14000;
 static int lastsign[16];
 
@@ -67,15 +67,10 @@ static int sc_to_vk(int sc){
     case SDL_SCANCODE_LSHIFT: case SDL_SCANCODE_RSHIFT: return 16; case SDL_SCANCODE_LCTRL: case SDL_SCANCODE_RCTRL: return 17; case SDL_SCANCODE_LALT: case SDL_SCANCODE_RALT: return 18; }
   return 0; }
 static SDL_GameController *gc[8]; static SDL_Joystick *js[8]; static int njoy;
-/* Odroid-GO family ("GO-Advance Gamepad", "GO-Super Gamepad"): d-pad is buttons 10-13, triggers 6/7, select 8, start 9 */
-static void apply_go_defaults(void){
-  if(joy_cfg_touched) return;
-  rawmap[PL2]=6; rawmap[PR2]=7; rawmap[PSELECT]=8; rawmap[PSTART]=9; rawdpad[0]=10; rawdpad[1]=11; rawdpad[2]=12; rawdpad[3]=13; }
 static void open_pads(void){
   for(int i=0;i<SDL_NumJoysticks()&&njoy<8;i++){
-    const char*pn=SDL_JoystickNameForIndex(i); int is_go=pn&&!strncmp(pn,"GO-",3);
-    if(is_go) apply_go_defaults();
-    if(!cfg_rawpad&&!is_go&&SDL_IsGameController(i)){ gc[njoy]=SDL_GameControllerOpen(i); if(gc[njoy]){ fprintf(stderr,"pad %d: controller '%s'\n",i,SDL_GameControllerName(gc[njoy]));
+    const char*pn=SDL_JoystickNameForIndex(i); fprintf(stderr,"pad %d: '%s'%s\n",i,pn?pn:"?",SDL_IsGameController(i)?" (SDL controller mapping exists)":"");
+    if(!cfg_rawpad&&SDL_IsGameController(i)){ gc[njoy]=SDL_GameControllerOpen(i); if(gc[njoy]){ fprintf(stderr,"pad %d: controller '%s'\n",i,SDL_GameControllerName(gc[njoy]));
         char*m=SDL_GameControllerMapping(gc[njoy]); if(m){ fprintf(stderr,"pad %d mapping: %s\n",i,m); SDL_free(m); } njoy++; } }
     else { js[njoy]=SDL_JoystickOpen(i); if(js[njoy]){ fprintf(stderr,"pad %d: raw joystick '%s' (%d buttons)\n",i,SDL_JoystickName(js[njoy]),SDL_JoystickNumButtons(js[njoy])); njoy++; } } } }
 #define B(x) SDL_GameControllerGetButton(c,x)
@@ -116,7 +111,7 @@ static void load_cfg(const char *dir){
     else if(!strcmp(l,"texbudget")) g_tex_budget_mb=n; else if(!strcmp(l,"touch")) g_hide_touch=!n;
     else if(!strcmp(l,"a")) padmap[PA]=n; else if(!strcmp(l,"b")) padmap[PB]=n; else if(!strcmp(l,"x")) padmap[PX]=n; else if(!strcmp(l,"y")) padmap[PY]=n;
     else if(!strcmp(l,"l1")) padmap[PL1]=n; else if(!strcmp(l,"r1")) padmap[PR1]=n; else if(!strcmp(l,"start")) padmap[PSTART]=n; else if(!strcmp(l,"select")) padmap[PSELECT]=n;
-    else if(!strcmp(l,"rawpad")) cfg_rawpad=n; else if(!strcmp(l,"deadzone")) cfg_deadzone=n;
+    else if(!strcmp(l,"rawpad")) cfg_rawpad=n; else if(!strcmp(l,"deadzone")) cfg_deadzone=n; else if(!strcmp(l,"name")){ static char nm[64]; snprintf(nm,sizeof nm,"%s",v); g_player_name=nm; }
     else if(!strncmp(l,"joy_",4)&&(joy_cfg_touched=1)&&0) {} else if(!strcmp(l,"joy_a")) rawmap[PA]=n; else if(!strcmp(l,"joy_b")) rawmap[PB]=n; else if(!strcmp(l,"joy_x")) rawmap[PX]=n; else if(!strcmp(l,"joy_y")) rawmap[PY]=n;
     else if(!strcmp(l,"joy_l1")) rawmap[PL1]=n; else if(!strcmp(l,"joy_r1")) rawmap[PR1]=n; else if(!strcmp(l,"joy_start")) rawmap[PSTART]=n; else if(!strcmp(l,"joy_select")) rawmap[PSELECT]=n;
     else if(!strcmp(l,"joy_up")) rawdpad[0]=n; else if(!strcmp(l,"joy_down")) rawdpad[1]=n; else if(!strcmp(l,"joy_left")) rawdpad[2]=n; else if(!strcmp(l,"joy_right")) rawdpad[3]=n;

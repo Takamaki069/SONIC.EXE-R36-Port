@@ -88,11 +88,14 @@ void engine_goto_room(int r);          /* immediate (used at start / by harness)
 void engine_frame(const uint8_t keys[256]);  /* one step + draw */
 int  engine_room(void);
 int  engine_ninst(void);
+int engine_set_global_str(const char*name,const char*v);
 int engine_set_global(const char*name,double v);
 int engine_obj_info(const char*name,double*x,double*y,double*hs);
 void engine_set_pos(const char*name,double x,double y);
+void engine_dump_instances(void);
 int engine_obj_count(const char*name);
 void engine_view_pos(double*x,double*y);
+extern const char *g_player_name;
 extern int g_tex_budget_mb;
 extern int g_verbose;
 extern int g_hide_touch;
