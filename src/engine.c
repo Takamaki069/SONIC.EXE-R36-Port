@@ -485,8 +485,12 @@ static void update_views(int snap){
     if(!snap&&hs>=0&&fabs(nx-E.vx[v])>hs) nx=E.vx[v]+(nx>E.vx[v]?hs:-hs);
     if(!snap&&vs>=0&&fabs(ny-E.vy[v])>vs) ny=E.vy[v]+(ny>E.vy[v]?vs:-vs);
     /* safeguard: the speed limit may slow the camera but must never let the followed object leave the screen */
-    if(t->x<nx) nx=t->x; if(t->x>nx+E.vw[v]) nx=t->x-E.vw[v];
-    if(t->y<ny) ny=t->y; if(t->y>ny+E.vh[v]) ny=t->y-E.vh[v];
+    /* an axis whose view speed is 0 is LOCKED (e.g. the Hide stage never scrolls vertically, even when a jump takes the
+       player above the top of the room), so only apply the safeguard on axes that are allowed to move */
+    if(rm->view[v].hs!=0){ if(t->x<nx) nx=t->x; if(t->x>nx+E.vw[v]) nx=t->x-E.vw[v]; }
+    if(rm->view[v].vs!=0){ if(t->y<ny) ny=t->y; if(t->y>ny+E.vh[v]) ny=t->y-E.vh[v]; }
+    /* the view never leaves the room (a room smaller than the view pins it to 0) */
+    if(nx>rm->w-E.vw[v]) nx=rm->w-E.vw[v]; if(nx<0) nx=0; if(ny>rm->h-E.vh[v]) ny=rm->h-E.vh[v]; if(ny<0) ny=0;
     E.vx[v]=nx; E.vy[v]=ny; } }
 
 static void step(void){

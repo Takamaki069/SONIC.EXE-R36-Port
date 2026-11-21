@@ -14,8 +14,9 @@ static void t_clip(int x,int y,int w,int h){ if(w<=0){ clip_x=0;clip_y=0;clip_w=
 static inline void put(int x,int y,int r,int g,int b,float a){
   if(x<clip_x||y<clip_y||x>=clip_x+clip_w||y>=clip_y+clip_h||x<0||y<0||x>=LOGICAL_W||y>=LOGICAL_H) return; uint8_t*d=fb+(y*LOGICAL_W+x)*3;
   d[0]=d[0]+(r-d[0])*a; d[1]=d[1]+(g-d[1])*a; d[2]=d[2]+(b-d[2])*a; }
+static int toplog=0;
 static void t_draw(int p,int sx,int sy,int sw,int sh,float dx,float dy,float dw,float dh,float px,float py,float ang,uint8_t r,uint8_t g,uint8_t b,float a){
-  ndraw++; if(!pg[p]||sw<=0||sh<=0||dw==0||dh==0) return; (void)px;(void)py;(void)ang;
+  ndraw++; if(toplog&&dy<8&&dy+(dh<0?-dh:dh)>0) fprintf(stderr,"[TOPLOG] page=%d src=%d,%d %dx%d dst=%.1f,%.1f %.1fx%.1f scale=%.3fx%.3f blend=%02x%02x%02x a=%.2f\n",p,sx,sy,sw,sh,dx,dy,dw,dh,dw/sw,dh/sh,r,g,b,a); if(!pg[p]||sw<=0||sh<=0||dw==0||dh==0) return; (void)px;(void)py;(void)ang;
   float adw=dw<0?-dw:dw,adh=dh<0?-dh:dh; float x0=dw<0?dx+dw:dx,y0=dh<0?dy+dh:dy;
   int ya=(int)floorf(y0+0.5f),yb=(int)floorf(y0+adh+0.5f),xa=(int)floorf(x0+0.5f),xb=(int)floorf(x0+adw+0.5f);
   if(ya<clip_y)ya=clip_y; if(yb>clip_y+clip_h)yb=clip_y+clip_h; if(xa<clip_x)xa=clip_x; if(xb>clip_x+clip_w)xb=clip_x+clip_w;
@@ -36,7 +37,7 @@ int main(int argc,char**argv){
   int frames=120,room=-1; const char*gset[16]; int ngset=0; const char*ppos=0; int trace=0; int dumpinst=-1; const char*pname=0; const char*keys="",*dumps="",*prefix="/tmp/frame";
   for(int i=2;i<argc;i++){ if(!strcmp(argv[i],"-f")) frames=atoi(argv[++i]); else if(!strcmp(argv[i],"-r")) room=atoi(argv[++i]); else if(!strcmp(argv[i],"-k")) keys=argv[++i];
     else if(!strcmp(argv[i],"-d")) dumps=argv[++i]; else if(!strcmp(argv[i],"-o")) prefix=argv[++i]; else if(!strcmp(argv[i],"-v")) g_verbose=1;
-    else if(!strcmp(argv[i],"-g")) gset[ngset++]=argv[++i]; else if(!strcmp(argv[i],"-p")) ppos=argv[++i]; else if(!strcmp(argv[i],"-t")) trace=atoi(argv[++i]); else if(!strcmp(argv[i],"-i")) dumpinst=atoi(argv[++i]); else if(!strcmp(argv[i],"-n")) pname=argv[++i]; else if(!strcmp(argv[i],"-w")) g_wrap_text=atoi(argv[++i]); }
+    else if(!strcmp(argv[i],"-g")) gset[ngset++]=argv[++i]; else if(!strcmp(argv[i],"-p")) ppos=argv[++i]; else if(!strcmp(argv[i],"-t")) trace=atoi(argv[++i]); else if(!strcmp(argv[i],"-i")) dumpinst=atoi(argv[++i]); else if(!strcmp(argv[i],"-n")) pname=argv[++i]; else if(!strcmp(argv[i],"-T")) toplog=1; else if(!strcmp(argv[i],"-w")) g_wrap_text=atoi(argv[++i]); }
   if(data_load(argv[1])) return 1; engine_prefetch_start(); if(pname) g_player_name=pname; PL=&tp; t_clip(0,0,0,0);
   g_tex_budget_mb=100000;
   if(engine_init(0)) return 1;
