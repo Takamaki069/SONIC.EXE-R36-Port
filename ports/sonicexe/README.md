@@ -4,10 +4,15 @@
 
 A handheld Linux port of Sonic.EXE.
 
-## INSTALLATION
+Here is a port I just finished of the classic Creepypasta fan game Sonic.exe! its been Tested with a Original R36S on both ArkOS4Clone and DarkOSen! It SHOULD work on any device on these OS's! also some may ask "Why?" eh, why not, it has a place in cultural history and I wanted a small project to work on to get my feet wet as it where. I have more ports in the works!
+Just some things to note right off the bat! 
 
-1. Install Sonic.EXE through PortMaster.
-2. Obtain your own copy of the original `SONIC.EXE` game file.
+## WARNING: 
+Jump scares and may trigger epilepsy!
+also, I can find no bugs that did not exist in the original, I left those in the game to keep it as faithful as I could aside from a word wrapping toggle (Default off) though that has a chance to crush the words here and there but is still readable.## INSTALLATION
+
+1. Install Sonic.EXE through PortMaster/PortMaster auto install (Tools/Portmaster/autoinstall) or just unpack the data yourself to your ports folder.
+2. Obtain your own copy of the original `SONIC.EXE` game file. (Available from the creator, MY5TCrimson on Gamejolt)
 3. Copy `SONIC.EXE` into:
 
    `ports/sonicexe/`
@@ -42,6 +47,13 @@ Available settings include:
 - Player name
 - FPS logging
 
+## CONTROLS
+A - Attack (Knuckles stage)
+B - Jump
+Start - Select data
+Start & Select - Hold for 1 second to quit
+D-Pad/Left Analog - Move
+
 ## TROUBLESHOOTING
 
 ### Game data not found
@@ -69,8 +81,9 @@ Check the controller settings in `sonicexe.cfg`.
 Port packaging and launcher adaptation:
 AnubisWithCoffee
 
-Original game and extraction utilities:
-Respective original authors.
+Original game: MY5TCrimson 
+
+Extraction utilities: Respective original authors.
 
 ## DISCLAIMER
 
